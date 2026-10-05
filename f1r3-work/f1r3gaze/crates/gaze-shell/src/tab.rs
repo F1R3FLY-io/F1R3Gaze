@@ -9,6 +9,7 @@ use crate::profile::seed;
 use blitz_dom::DocumentConfig;
 use blitz_traits::navigation::{NavigationOptions, NavigationProvider};
 use blitz_traits::net::NetWaker;
+use blitz_traits::shell::ShellProvider;
 use gaze_broker::{GrantPlan, Site, Status};
 use gaze_dom_blitz::{PageState, RhoDocument, WakeHandle};
 use gaze_knf::Knf;
@@ -65,6 +66,9 @@ pub struct Tab {
     pub title: String,
     /// Shown in the status line (e.g. "JavaScript was not run").
     pub notice: Option<String>,
+    /// The document shown is F1R3Gaze's own "could not load" page, so it is
+    /// themed like the built-in pages.
+    pub error_page: bool,
     eng: Rc<Engine>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -75,10 +79,20 @@ pub struct Tab {
     pub core: Option<Rc<RefCell<TabCore>>>,
     links: Arc<Mutex<Vec<String>>>,
     pub wake: WakeHandle,
+    /// The shell provider of this tab's documents. In the window this is the
+    /// chrome's `PageShell`, through which a page reports hover changes and
+    /// redraw requests and which grants it nothing else (docs/ui/ledger.md,
+    /// L8). `None` gives Blitz's `DummyShellProvider`, as in headless runs.
+    page_shell: Option<Arc<dyn ShellProvider>>,
 }
 
 impl Tab {
-    pub fn new(eng: Rc<Engine>, id: u64, wake: WakeHandle) -> Tab {
+    pub fn new(
+        eng: Rc<Engine>,
+        id: u64,
+        wake: WakeHandle,
+        page_shell: Option<Arc<dyn ShellProvider>>,
+    ) -> Tab {
         let (tx, rx) = channel();
         Tab {
             id,
@@ -88,6 +102,7 @@ impl Tab {
             stage: Stage::Fetching,
             title: String::new(),
             notice: None,
+            error_page: false,
             eng,
             tx,
             rx,
@@ -98,6 +113,7 @@ impl Tab {
             core: None,
             links: Arc::default(),
             wake,
+            page_shell,
         }
     }
 
@@ -113,6 +129,7 @@ impl Tab {
         self.url = url.clone();
         self.stage = Stage::Fetching;
         self.notice = None;
+        self.error_page = false;
         self.fail = None;
         self.knfs.clear();
         self.plans.clear();
@@ -124,6 +141,16 @@ impl Tab {
             let _ = tx.send(Msg::Doc(g, Engine::fetch_document(&http, &schemes, &url, https_only)));
             w.wake();
         });
+    }
+
+    /// Whether [`Tab::back`] has an entry to go to.
+    pub fn can_go_back(&self) -> bool {
+        self.hist > 0
+    }
+
+    /// Whether [`Tab::forward`] has an entry to go to.
+    pub fn can_go_forward(&self) -> bool {
+        self.hist + 1 < self.history.len()
     }
 
     pub fn back(&mut self) -> bool {
@@ -164,6 +191,7 @@ impl Tab {
                 queue: Arc::clone(&self.links),
                 wake: self.wake.clone(),
             })),
+            shell_provider: self.page_shell.clone(),
             ..Default::default()
         }
     }
@@ -218,8 +246,8 @@ impl Tab {
                     out = Some(doc);
                 }
                 Msg::Doc(_, Err(e)) => {
-                    self.stage = Stage::Failed(e.clone());
-                    self.title = "Could not load".into();
+                    self.title = pages::ERROR_TITLE.into();
+                    self.error_page = true;
                     out = Some(RhoDocument::from_html(&pages::error(&self.url, &e), self.config("gaze://error")));
                     self.stage = Stage::Failed(e);
                 }
@@ -275,10 +303,10 @@ impl Tab {
                 Err(e) => self.stage = Stage::Failed(e.to_string()),
             }
         }
-        if let PageState::Failed(e) = doc.state() {
-            if !matches!(self.stage, Stage::Failed(_)) {
-                self.stage = Stage::Failed(e.clone());
-            }
+        if let PageState::Failed(e) = doc.state()
+            && !matches!(self.stage, Stage::Failed(_))
+        {
+            self.stage = Stage::Failed(e.clone());
         }
         let t = doc.title();
         if !t.is_empty() {
@@ -291,10 +319,10 @@ impl Tab {
         let mut v: Vec<(String, String)> = Vec::new();
         for p in &self.plans {
             for e in &p.entries {
-                if let Status::Ask(t) = &e.status {
-                    if !v.iter().any(|(u, _)| *u == e.urn) {
-                        v.push((e.urn.clone(), t.clone()));
-                    }
+                if let Status::Ask(t) = &e.status
+                    && !v.iter().any(|(u, _)| *u == e.urn)
+                {
+                    v.push((e.urn.clone(), t.clone()));
                 }
             }
         }
