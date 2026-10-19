@@ -25,6 +25,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -126,6 +139,15 @@ dependencies = [
  "percent-encoding",
  "windows-sys 0.60.2",
  "x11rb",
+]
+
+[[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -779,6 +801,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "dispatch2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -933,6 +976,7 @@ dependencies = [
 name = "f1r3c"
 version = "0.1.0"
 dependencies = [
+ "gaze-fs",
  "gaze-knf",
  "gaze-net",
  "gaze-shard",
@@ -1127,6 +1171,7 @@ dependencies = [
 name = "gaze-blob"
 version = "0.1.0"
 dependencies = [
+ "gaze-fs",
  "gaze-net",
 ]
 
@@ -1151,6 +1196,7 @@ dependencies = [
  "k1ndl1ng-norm",
  "k1ndl1ng-parse",
  "keyboard-types 0.7.0",
+ "parley",
  "url",
 ]
 
@@ -1174,6 +1220,10 @@ dependencies = [
  "k1ndl1ng-norm",
  "k1ndl1ng-parse",
 ]
+
+[[package]]
+name = "gaze-fs"
+version = "0.1.0"
 
 [[package]]
 name = "gaze-graded"
@@ -1214,6 +1264,7 @@ name = "gaze-shard"
 version = "0.1.0"
 dependencies = [
  "gaze-blob",
+ "gaze-fs",
  "gaze-knf",
  "gaze-net",
  "getrandom 0.2.17",
@@ -1229,16 +1280,20 @@ dependencies = [
 name = "gaze-shell"
 version = "0.1.0"
 dependencies = [
+ "anyrender",
  "anyrender_vello",
  "blitz-dom",
  "blitz-html",
  "blitz-shell",
  "blitz-traits",
+ "cursor-icon",
+ "dirs",
  "gaze-blob",
  "gaze-broker",
  "gaze-dom-blitz",
  "gaze-dom-core",
  "gaze-exec",
+ "gaze-fs",
  "gaze-knf",
  "gaze-net",
  "gaze-shard",
@@ -1246,14 +1301,23 @@ dependencies = [
  "gaze-wallet",
  "getrandom 0.2.17",
  "k1ndl1ng-norm",
+ "k1ndl1ng-parse",
  "keyboard-types 0.7.0",
+ "liblevenshtein",
+ "parley",
+ "serde",
+ "serde_json",
+ "toml",
+ "toml_edit",
  "url",
+ "winit",
 ]
 
 [[package]]
 name = "gaze-store"
 version = "0.1.0"
 dependencies = [
+ "gaze-fs",
  "k1ndl1ng-norm",
 ]
 
@@ -1263,6 +1327,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
+ "gaze-fs",
  "gaze-net",
  "gaze-shard",
  "k1ndl1ng-norm",
@@ -1305,13 +1370,25 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi 5.3.0",
+ "wasip2",
+]
+
+[[package]]
+name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
  "libc",
- "r-efi",
+ "r-efi 6.0.0",
 ]
 
 [[package]]
@@ -1915,6 +1992,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
+name = "libdictenstein"
+version = "4.0.0-rc.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3107cc65fec16a66624be386df12a0c8f4786c665c2088124bccc63350587842"
+dependencies = [
+ "arc-swap",
+ "llattice",
+ "log",
+ "parking_lot",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "liblevenshtein"
+version = "4.0.0-rc.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "016fea81cd6ac523e7c1321a920c8c22044dcc1be5b3440d9faaf7566fb070aa"
+dependencies = [
+ "ahash",
+ "arc-swap",
+ "libdictenstein",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1965,6 +2071,12 @@ name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
+
+[[package]]
+name = "llattice"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11b2da71811803fafc6a1f2aff2fb8d8f25be26ee38678a89cf4008e7374f567"
 
 [[package]]
 name = "lock_api"
@@ -2324,6 +2436,12 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "option-ext"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orbclient"
@@ -2693,6 +2811,12 @@ dependencies = [
 
 [[package]]
 name = "r-efi"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
@@ -2808,6 +2932,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "737970939a87c6fa31e7acad13307bccbb017a073b695b6089a2c484f929e20e"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "redox_users"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
+dependencies = [
+ "libredox",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3224,6 +3358,9 @@ name = "smallvec"
 version = "1.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "smithay-client-toolkit"
@@ -3753,6 +3890,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -4013,6 +4151,15 @@ name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
+
+[[package]]
+name = "wasip2"
+version = "1.0.4+wasi-0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+dependencies = [
+ "wit-bindgen",
+]
 
 [[package]]
 name = "wasm-bindgen"
@@ -4949,6 +5096,12 @@ checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "wit-bindgen"
+version = "0.57.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "writeable"

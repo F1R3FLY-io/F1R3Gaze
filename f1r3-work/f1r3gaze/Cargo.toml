@@ -8,6 +8,7 @@ members = [
   "crates/gaze-exec",
   "crates/gaze-broker",
   # Native.
+  "crates/gaze-fs",
   "crates/gaze-net",
   "crates/gaze-store",
   "crates/gaze-blob",
@@ -25,6 +26,7 @@ default-members = [
   "crates/gaze-dom-core",
   "crates/gaze-exec",
   "crates/gaze-broker",
+  "crates/gaze-fs",
   "crates/gaze-net",
   "crates/gaze-store",
   "crates/gaze-blob",
@@ -38,7 +40,7 @@ default-members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.95"
 license = "Apache-2.0"
 authors = ["F1R3FLY.io"]
 repository = "https://github.com/F1R3FLY-io/F1R3Gaze"
@@ -61,6 +63,12 @@ blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "674d7d21445
 blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "674d7d2144585baa0f7368b8ad76371c93fe1b65", default-features = false }
 blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "674d7d2144585baa0f7368b8ad76371c93fe1b65", default-features = false }
 anyrender_vello = "0.14.0"
+# The renderer traits anyrender_vello implements (gaze-shell wraps its window
+# renderer).
+anyrender = "0.13.0"
+# The event-loop types gaze-shell's application handler forwards to Blitz's:
+# the exact version blitz-shell pins, so both name the same crate.
+winit = { version = "=0.31.0-beta.3", default-features = false }
 
 # In-workspace.
 gaze-graded = { path = "crates/gaze-graded" }
@@ -68,6 +76,7 @@ gaze-knf = { path = "crates/gaze-knf" }
 gaze-dom-core = { path = "crates/gaze-dom-core" }
 gaze-exec = { path = "crates/gaze-exec" }
 gaze-broker = { path = "crates/gaze-broker" }
+gaze-fs = { path = "crates/gaze-fs" }
 gaze-net = { path = "crates/gaze-net" }
 gaze-store = { path = "crates/gaze-store" }
 gaze-wallet = { path = "crates/gaze-wallet" }
