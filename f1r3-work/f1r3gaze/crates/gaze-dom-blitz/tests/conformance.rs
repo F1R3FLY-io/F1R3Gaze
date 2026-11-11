@@ -217,3 +217,136 @@ fn rhoviz_agrees_across_backends_and_blitz_can_draw_the_picture() {
     let size = node.final_layout().size;
     assert!(size.width > 300.0 && size.height > 150.0, "laid out at {size:?}");
 }
+
+/// A page that replaces part of its document every frame must not leave the
+/// window hit-testing nodes that no longer exist. The window delivers
+/// pointer events between a frame's commit and the next layout, and Blitz's
+/// hit test walks the paint tree of the *last* layout; a dropped node still
+/// listed there used to panic (`Option::unwrap()` in `blitz-dom` `node.rs`).
+#[test]
+fn pointer_events_between_a_commit_and_the_next_layout_are_safe() {
+    let html = gaze_rhoviz::page_html(gaze_rhoviz::DEFAULT_TERM, "*");
+    let k = Knf::from_source(gaze_rhoviz::SCRIPT, Level::K1G, &[]).unwrap();
+    let mut tab = TabExec::load(&k, BlitzDom::from_html(&html), [3; 32], &default_policy).unwrap();
+    let doc = tab.dom.backend.doc.clone();
+    doc.borrow_mut().set_viewport(blitz_traits::shell::Viewport::new(1000, 900, 1.0, blitz_traits::shell::ColorScheme::Light));
+    let mut t = 0;
+    let mut hits = 0;
+    for frame in 0..900u32 {
+        t += 16;
+        tab.frame(t);
+        // The pointer moves over the picture after the commit, before layout.
+        for (x, y) in [(480.0, 600.0), (300.0, 500.0), (700.0, 700.0), (60.0, 40.0)] {
+            hits += doc.borrow().hit(x, y).is_some() as u32;
+            // What the window does on a pointer move: hit-test, then update hover.
+            doc.borrow_mut().set_hover_to(x, y);
+        }
+        // The window lays out now and then, not after every commit.
+        if frame % 3 == 0 {
+            doc.borrow_mut().resolve(0.0);
+        }
+    }
+    assert!(hits > 0);
+}
+
+// ---------------------------------------------------------------------------
+// The window's own path: a RhoDocument polled in real time while real pointer
+// events are fed to it, as `blitz-shell` does. This is the nearest thing to
+// the window that runs without a GPU.
+
+struct NoServices;
+impl gaze_dom_blitz::Services for NoServices {
+    fn request(&mut self, _req: gaze_exec::CapRequest, _out: &mut Vec<gaze_dom_blitz::Delivery>) {}
+    fn poll(&mut self, _out: &mut Vec<gaze_dom_blitz::Delivery>) {}
+}
+
+fn pointer(x: f32, y: f32, down: bool) -> blitz_traits::events::BlitzPointerEvent {
+    use blitz_traits::events::*;
+    BlitzPointerEvent {
+        id: BlitzPointerId::Mouse,
+        is_primary: true,
+        coords: PointerCoords { page_x: x, page_y: y, screen_x: x, screen_y: y, client_x: x, client_y: y },
+        button: MouseEventButton::Main,
+        buttons: if down { MouseEventButtons::Primary } else { MouseEventButtons::None },
+        mods: Default::default(),
+        details: Default::default(),
+        element: Default::default(),
+        active_pointers: Default::default(),
+    }
+}
+
+#[test]
+fn rhoviz_survives_the_window_pointer_moves_drags_and_clicks() {
+    use blitz_dom::Document;
+    use blitz_traits::events::UiEvent;
+    let html = gaze_rhoviz::page_html(gaze_rhoviz::DEFAULT_TERM, "*");
+    let mut d = gaze_dom_blitz::RhoDocument::from_html(&html, blitz_dom::DocumentConfig::default());
+    let k = Knf::from_source(gaze_rhoviz::SCRIPT, Level::K1G, &[]).unwrap();
+    d.start(&[k], [5; 32], &default_policy, Box::new(NoServices)).unwrap();
+    let base = d.base();
+    base.borrow_mut().set_viewport(blitz_traits::shell::Viewport::new(1000, 900, 1.0, blitz_traits::shell::ColorScheme::Light));
+    let rect = |id: &str| {
+        let doc = base.borrow();
+        let n = doc.get_element_by_id(id).unwrap();
+        doc.get_client_bounding_rect(n).unwrap()
+    };
+    let centre = |id: &str| {
+        let r = rect(id);
+        ((r.x + r.width / 2.0) as f32, (r.y + r.height / 2.0) as f32)
+    };
+    let note = |d: &gaze_dom_blitz::RhoDocument| {
+        let doc = d.base();
+        let doc = doc.borrow();
+        doc.get_node(doc.get_element_by_id("note").unwrap()).unwrap().text_content()
+    };
+
+    let turn = |d: &mut gaze_dom_blitz::RhoDocument, i: u32, events: &[UiEvent]| {
+        std::thread::sleep(std::time::Duration::from_millis(17));
+        d.poll(None);
+        for e in events {
+            d.handle_ui_event(e.clone());
+        }
+        // The window lays out when it paints, which is not after every commit.
+        if i % 2 == 0 {
+            base.borrow_mut().resolve(0.0);
+        }
+    };
+
+    // Let it start, then sweep the pointer across the whole page while the
+    // picture is being replaced underneath it.
+    for i in 0..30 {
+        turn(&mut d, i, &[]);
+    }
+    base.borrow_mut().resolve(0.0);
+    assert!(base.borrow().query_selector("#stage svg").unwrap().is_some(), "a picture is up");
+    for i in 0..60u32 {
+        let (x, y) = (40.0 + 15.0 * i as f32, 120.0 + 12.0 * i as f32);
+        turn(&mut d, i, &[UiEvent::PointerMove(pointer(x, y, false))]);
+    }
+
+    // Drag across the picture.
+    base.borrow_mut().resolve(0.0);
+    let (sx, sy) = centre("stage");
+    turn(&mut d, 0, &[UiEvent::PointerDown(pointer(sx, sy, true))]);
+    for i in 0..20u32 {
+        turn(&mut d, i, &[UiEvent::PointerMove(pointer(sx + 6.0 * i as f32, sy + 2.0 * i as f32, true))]);
+    }
+    turn(&mut d, 0, &[UiEvent::PointerUp(pointer(sx + 120.0, sy + 40.0, false))]);
+
+    // Click pause, then step: the caption must say so.
+    base.borrow_mut().resolve(0.0);
+    for id in ["play", "next", "spin", "zin", "zout", "prev", "again", "go"] {
+        let (x, y) = centre(id);
+        turn(&mut d, 0, &[UiEvent::PointerMove(pointer(x, y, false))]);
+        turn(&mut d, 0, &[UiEvent::PointerDown(pointer(x, y, true))]);
+        turn(&mut d, 0, &[UiEvent::PointerUp(pointer(x, y, false))]);
+        for i in 0..4 {
+            turn(&mut d, i, &[]);
+        }
+        if id == "play" {
+            assert!(note(&d).contains("(paused)"), "clicking play / pause pauses: {}", note(&d));
+        }
+        base.borrow_mut().resolve(0.0);
+    }
+    assert!(!note(&d).is_empty());
+}
