@@ -679,6 +679,41 @@ impl ChromeDocument {
     }
 }
 
+impl ChromeDocument {
+    /// Tell the window whether a text box has the keyboard.
+    ///
+    /// On macOS the editing keys (delete, the arrows, select all, and the
+    /// rest of the standard key bindings) arrive only while text input is
+    /// enabled for the window. Blitz enables it when a text box gains focus
+    /// and disables it when one loses focus, but the chrome and a page are
+    /// two documents: clicking from the address bar into a page's text box
+    /// makes one disable while the other enables, in no fixed order. So
+    /// after every press the answer is worked out afresh from where focus
+    /// actually is.
+    fn sync_text_input(&mut self) {
+        fn is_text_box(doc: &BaseDocument, n: Option<NodeId>) -> bool {
+            n.and_then(|n| doc.get_node(n)).and_then(|n| n.element_data()).is_some_and(|e| e.text_input_data().is_some())
+        }
+        let focus = self.inner.get_focussed_node_id();
+        let view = self.tabs.get(self.active).map(|t| t.1);
+        let in_page = |c: &mut ChromeDocument| {
+            view.and_then(|v| rho_mut(&mut c.inner, v)).is_some_and(|r| {
+                let base = r.base();
+                let doc = base.borrow();
+                is_text_box(&doc, doc.get_focussed_node_id())
+            })
+        };
+        let on = if is_text_box(&self.inner, focus) {
+            true
+        } else if focus.is_none() || focus == view {
+            in_page(self)
+        } else {
+            false
+        };
+        self.inner.shell_provider.set_ime_enabled(on);
+    }
+}
+
 fn rho_mut(doc: &mut BaseDocument, view: NodeId) -> Option<&mut RhoDocument> {
     let d: &mut dyn Document = doc.get_node_mut(view)?.subdoc_mut()?;
     let a: &mut dyn Any = d;
@@ -694,6 +729,7 @@ impl Document for ChromeDocument {
     }
 
     fn handle_ui_event(&mut self, event: UiEvent) {
+        let pointer_press = matches!(event, UiEvent::PointerDown(_) | UiEvent::PointerUp(_));
         let mut actions = Vec::new();
         let url_node = self.id("url");
         {
@@ -706,6 +742,9 @@ impl Document for ChromeDocument {
         }
         for a in actions {
             self.act(a);
+        }
+        if pointer_press {
+            self.sync_text_input();
         }
     }
 
@@ -730,6 +769,20 @@ impl Document for ChromeDocument {
             }
             let view = self.tabs[i].1;
             let tid = self.tabs[i].0.id;
+            // A page is a sub-document, and Blitz gives a document it did not
+            // create itself a shell provider that does nothing. Hand each
+            // page the window's, so that a text box in a page can turn text
+            // input on, use the clipboard and set the cursor. (The window's
+            // provider is installed after this document is built, hence here
+            // and not at construction.)
+            let shell = self.inner.shell_provider.clone();
+            if let Some(r) = rho_mut(&mut self.inner, view) {
+                let base = r.base();
+                let stale = !std::sync::Arc::ptr_eq(&base.borrow().shell_provider, &shell);
+                if stale {
+                    base.borrow_mut().set_shell_provider(shell);
+                }
+            }
             if let Some(r) = rho_mut(&mut self.inner, view) {
                 self.tabs[i].0.pump_doc(r);
                 let lines = r.take_console();
@@ -781,5 +834,140 @@ mod tests {
         assert_eq!(Action::parse("revoke:rho:gaze:net"), Some(Action::Revoke("rho:gaze:net".into())));
         assert_eq!(Action::parse("select:x"), None);
         assert_eq!(Action::parse("wallet:use:1111abc"), Some(Action::Wallet("use:1111abc".into())));
+    }
+
+    // -- keyboard input reaches a page ------------------------------------
+
+    use blitz_traits::events::{
+        BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, KeyState, MouseEventButton, MouseEventButtons, PointerCoords,
+    };
+
+    fn ptr(x: f32, y: f32, down: bool) -> BlitzPointerEvent {
+        BlitzPointerEvent {
+            id: BlitzPointerId::Mouse,
+            is_primary: true,
+            coords: PointerCoords { page_x: x, page_y: y, screen_x: x, screen_y: y, client_x: x, client_y: y },
+            button: MouseEventButton::Main,
+            buttons: if down { MouseEventButtons::Primary } else { MouseEventButtons::None },
+            mods: Default::default(),
+            details: Default::default(),
+            element: Default::default(),
+            active_pointers: Default::default(),
+        }
+    }
+
+    /// A window that remembers whether text input was last turned on or off.
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Option<bool>>);
+    impl Recorder {
+        fn ime(&self) -> Option<bool> {
+            *self.0.lock().unwrap()
+        }
+    }
+    impl blitz_traits::shell::ShellProvider for Recorder {
+        fn set_ime_enabled(&self, on: bool) {
+            *self.0.lock().unwrap() = Some(on);
+        }
+    }
+
+    fn press(key: Key, code: keyboard_types::Code) -> UiEvent {
+        UiEvent::KeyDown(BlitzKeyEvent {
+            key,
+            code,
+            modifiers: Default::default(),
+            location: keyboard_types::Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+            text: None,
+        })
+    }
+
+    /// A page's own text box takes keys once it has been clicked: the chrome
+    /// must hand keyboard events on to the tab that was clicked in, and stop
+    /// handing them on when the address bar is clicked instead.
+    #[test]
+    fn keys_reach_a_text_box_in_the_page() {
+        let dir = std::env::temp_dir().join(format!("gaze-keys-{}", std::process::id()));
+        let eng = Engine::new(dir.clone());
+        let mut c = ChromeDocument::new(eng, "gaze://rhoviz?term=Nil&steps=0");
+        c.inner.set_viewport(blitz_traits::shell::Viewport::new(1100, 900, 1.0, blitz_traits::shell::ColorScheme::Light));
+        let shell = std::sync::Arc::new(Recorder::default());
+        c.inner.set_shell_provider(shell.clone());
+        let turn = |c: &mut ChromeDocument, events: Vec<UiEvent>| {
+            std::thread::sleep(std::time::Duration::from_millis(17));
+            c.poll(None);
+            for e in events {
+                c.handle_ui_event(e);
+            }
+            c.inner.resolve(0.0);
+        };
+        for _ in 0..60 {
+            turn(&mut c, vec![]);
+        }
+        let view = c.tabs[0].1;
+        let page_value = |c: &mut ChromeDocument| -> String {
+            let r = rho_mut(&mut c.inner, view).expect("the page is loaded");
+            let base = r.base();
+            let doc = base.borrow();
+            let n = doc.get_element_by_id("src").expect("the page has its term box");
+            doc.get_node(n).unwrap().element_data().unwrap().text_input_data().unwrap().editor.raw_text().to_string()
+        };
+        let url_value = |c: &ChromeDocument| -> String {
+            let n = c.id("url").unwrap();
+            c.inner.get_node(n).unwrap().element_data().unwrap().text_input_data().unwrap().editor.raw_text().to_string()
+        };
+        assert_eq!(page_value(&mut c), "Nil");
+
+        // Where the page's term box is, in window coordinates.
+        let (x, y) = {
+            let v = c.inner.get_client_bounding_rect(view).unwrap();
+            let r = rho_mut(&mut c.inner, view).unwrap();
+            let base = r.base();
+            let doc = base.borrow();
+            let b = doc.get_client_bounding_rect(doc.get_element_by_id("src").unwrap()).unwrap();
+            ((v.x + b.x + b.width - 10.0) as f32, (v.y + b.y + b.height / 2.0) as f32)
+        };
+        turn(&mut c, vec![UiEvent::PointerMove(ptr(x, y, false))]);
+        turn(&mut c, vec![UiEvent::PointerDown(ptr(x, y, true))]);
+        turn(&mut c, vec![UiEvent::PointerUp(ptr(x, y, false))]);
+        assert_eq!(shell.ime(), Some(true), "a text box in the page turns text input on for the window");
+        turn(&mut c, vec![press(Key::Character("x".into()), keyboard_types::Code::KeyX)]);
+        turn(&mut c, vec![press(Key::Character("y".into()), keyboard_types::Code::KeyY)]);
+        assert_eq!(page_value(&mut c), "Nilxy", "typing reaches the page");
+        #[cfg(not(target_os = "macos"))]
+        {
+            turn(&mut c, vec![press(Key::Backspace, keyboard_types::Code::Backspace)]);
+            assert_eq!(page_value(&mut c), "Nilx", "and so does Backspace");
+        }
+        // The key bindings macOS sends in place of key presses for editing.
+        turn(&mut c, vec![UiEvent::AppleStandardKeybinding("deleteBackward:".into())]);
+        let after = page_value(&mut c);
+        assert!(after == "Nil" || after == "Nilx", "deleteBackward: reaches the page: {after}");
+        assert_ne!(after, "Nilxy");
+        turn(&mut c, vec![UiEvent::AppleStandardKeybinding("selectAll:".into())]);
+        turn(&mut c, vec![UiEvent::AppleStandardKeybinding("deleteBackward:".into())]);
+        assert_eq!(page_value(&mut c), "", "select all, then delete");
+
+        // Click the address bar: keys go there now, not to the page.
+        let before = url_value(&c);
+        let (ux, uy) = {
+            let b = c.inner.get_client_bounding_rect(c.id("url").unwrap()).unwrap();
+            ((b.x + b.width - 10.0) as f32, (b.y + b.height / 2.0) as f32)
+        };
+        turn(&mut c, vec![UiEvent::PointerMove(ptr(ux, uy, false))]);
+        turn(&mut c, vec![UiEvent::PointerDown(ptr(ux, uy, true))]);
+        turn(&mut c, vec![UiEvent::PointerUp(ptr(ux, uy, false))]);
+        assert_eq!(shell.ime(), Some(true), "so does the address bar");
+        turn(&mut c, vec![press(Key::Character("z".into()), keyboard_types::Code::KeyZ)]);
+        assert_eq!(url_value(&c), format!("{before}z"));
+        assert_eq!(page_value(&mut c), "", "the page no longer gets the keys");
+
+        // Back into the page's box: on again, whichever document spoke last.
+        turn(&mut c, vec![UiEvent::PointerMove(ptr(x, y, false))]);
+        turn(&mut c, vec![UiEvent::PointerDown(ptr(x, y, true))]);
+        turn(&mut c, vec![UiEvent::PointerUp(ptr(x, y, false))]);
+        assert_eq!(shell.ime(), Some(true), "address bar to page keeps text input on");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

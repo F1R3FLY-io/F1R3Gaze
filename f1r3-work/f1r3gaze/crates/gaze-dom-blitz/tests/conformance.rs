@@ -350,3 +350,70 @@ fn rhoviz_survives_the_window_pointer_moves_drags_and_clicks() {
     }
     assert!(!note(&d).is_empty());
 }
+
+fn key_down(key: keyboard_types::Key, code: keyboard_types::Code, text: Option<&str>) -> blitz_traits::events::UiEvent {
+    use blitz_traits::events::*;
+    UiEvent::KeyDown(BlitzKeyEvent {
+        key,
+        code,
+        modifiers: Default::default(),
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+        text: text.map(Into::into),
+    })
+}
+
+/// The term box must stay editable while the picture is being redrawn.
+#[test]
+fn the_term_box_can_be_edited_while_the_picture_plays() {
+    use blitz_dom::Document;
+    use blitz_traits::events::UiEvent;
+    use keyboard_types::{Code, Key};
+    let html = gaze_rhoviz::page_html("Nil | Nil", "*");
+    let mut d = gaze_dom_blitz::RhoDocument::from_html(&html, blitz_dom::DocumentConfig::default());
+    let k = Knf::from_source(gaze_rhoviz::SCRIPT, Level::K1G, &[]).unwrap();
+    d.start(&[k], [5; 32], &default_policy, Box::new(NoServices)).unwrap();
+    let base = d.base();
+    base.borrow_mut().set_viewport(blitz_traits::shell::Viewport::new(1000, 900, 1.0, blitz_traits::shell::ColorScheme::Light));
+    let turn = |d: &mut gaze_dom_blitz::RhoDocument, events: &[UiEvent]| {
+        std::thread::sleep(std::time::Duration::from_millis(17));
+        d.poll(None);
+        for e in events {
+            d.handle_ui_event(e.clone());
+        }
+        base.borrow_mut().resolve(0.0);
+    };
+    let value = |d: &gaze_dom_blitz::RhoDocument| {
+        let t = d.tab().unwrap();
+        let n = t.dom.backend.by_id("src").unwrap();
+        t.dom.backend.attr(n, "value").unwrap_or_default()
+    };
+    for _ in 0..20 {
+        turn(&mut d, &[]);
+    }
+    assert_eq!(value(&d), "Nil | Nil");
+    let (x, y) = {
+        let doc = base.borrow();
+        let r = doc.get_client_bounding_rect(doc.get_element_by_id("src").unwrap()).unwrap();
+        ((r.x + r.width - 8.0) as f32, (r.y + r.height / 2.0) as f32)
+    };
+    turn(&mut d, &[UiEvent::PointerMove(pointer(x, y, false))]);
+    turn(&mut d, &[UiEvent::PointerDown(pointer(x, y, true))]);
+    turn(&mut d, &[UiEvent::PointerUp(pointer(x, y, false))]);
+    for _ in 0..5 {
+        turn(&mut d, &[]);
+    }
+    turn(&mut d, &[key_down(Key::Character("x".into()), Code::KeyX, Some("x"))]);
+    for _ in 0..5 {
+        turn(&mut d, &[]);
+    }
+    assert_eq!(value(&d), "Nil | Nilx", "typing reaches the box");
+    turn(&mut d, &[key_down(Key::Backspace, Code::Backspace, None)]);
+    turn(&mut d, &[key_down(Key::Backspace, Code::Backspace, None)]);
+    for _ in 0..5 {
+        turn(&mut d, &[]);
+    }
+    assert_eq!(value(&d), "Nil | Ni", "and so does deleting");
+}

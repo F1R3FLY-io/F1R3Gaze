@@ -19,5 +19,7 @@ keyboard-types = "0.7"
 
 [dev-dependencies]
 gaze-rhoviz.workspace = true
-# The rhoviz test checks that Blitz can lay out the picture as an inline SVG.
-blitz-dom = { workspace = true, features = ["svg"] }
+# The rhoviz tests check that Blitz can lay out the picture as an inline SVG,
+# and edit a text box, which needs real fonts: without any, the editor has no
+# clusters to delete.
+blitz-dom = { workspace = true, features = ["svg", "system-fonts"] }
