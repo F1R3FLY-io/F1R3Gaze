@@ -16,6 +16,7 @@ pub fn builtin(url: &str) -> Option<String> {
 <code>f1r3h://blake2b-256/…</code>.</p>
 <p>This page runs a f1r3lang program. It holds one capability, the document:</p>
 <p><button id="lamp">lamp</button></p>
+<p><a href="gaze://rhoviz">rhoviz</a>: watch a rho term reduce, drawn in three dimensions.</p>
 <p class="muted">Pages with JavaScript are shown without it. <a href="gaze://about">About F1R3Gaze</a></p>
 <script type="application/f1r3lang" imports="doc">
 new found, sub, clicks, on, off in {{
@@ -40,6 +41,15 @@ the quorum and blob mirrors are configured there.</p>
 (node work package N1), legacy JavaScript tabs, devtools time travel.</p></body></html>"#,
             env!("CARGO_PKG_VERSION")
         ),
+        "rhoviz" => {
+            // gaze://rhoviz?term=TERM&steps=N — both optional; steps may be `*`.
+            let q = url::Url::parse(url).ok();
+            let get = |k: &str| q.as_ref().and_then(|u| u.query_pairs().find(|(n, _)| n == k).map(|(_, v)| v.into_owned()));
+            gaze_rhoviz::page_html(
+                &get("term").unwrap_or_else(|| gaze_rhoviz::DEFAULT_TERM.to_string()),
+                &get("steps").unwrap_or_else(|| gaze_rhoviz::DEFAULT_STEPS.to_string()),
+            )
+        }
         _ => return None,
     })
 }

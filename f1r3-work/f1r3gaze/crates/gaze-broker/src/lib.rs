@@ -26,6 +26,7 @@ pub const DOC: &str = "rho:gaze:doc";
 pub const LOG: &str = "rho:gaze:log";
 pub const CLOCK: &str = "rho:gaze:clock";
 pub const RAND: &str = "rho:gaze:rand";
+pub const RHOVIZ: &str = "rho:gaze:rhoviz";
 pub const NET: &str = "rho:gaze:net";
 pub const STORE: &str = "rho:gaze:store";
 pub const NAV: &str = "rho:gaze:nav";
@@ -120,7 +121,7 @@ pub enum Default_ {
 /// The default policy table of spec §8.1.
 pub fn default_for(urn: &str, site: &Site) -> Default_ {
     match urn {
-        DOC | LOG | CLOCK | RAND | NET | STORE | NAV => Default_::Grant,
+        DOC | LOG | CLOCK | RAND | RHOVIZ | NET | STORE | NAV => Default_::Grant,
         SHARD => Default_::Prompt,
         DEBUG if site.is_internal() => Default_::Grant,
         _ => Default_::Deny,

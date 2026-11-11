@@ -234,3 +234,192 @@ fn remainder_patterns_survive_extra_event_fields() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// rhoviz: the term visualiser, driven by its own page.
+
+const RELAY: &str = "new a, b, c in { a!(Nil) | for(_ <- a){ b!(Nil) } | for(_ <- b){ c!(Nil) } | for(_ <- c){ stdout!(Nil) } }";
+
+fn rhoviz_tab(term: &str, steps: &str) -> TabExec<MemDom> {
+    let html = gaze_rhoviz::page_html(term, steps);
+    let k = Knf::from_source(gaze_rhoviz::SCRIPT, Level::K1G, &[]).expect("the page's program compiles");
+    let mut held: Vec<&str> = k.manifest.imports.iter().map(|(_, u)| u.as_str()).collect();
+    held.sort();
+    assert_eq!(
+        held,
+        vec!["rho:gaze:doc", "rho:gaze:rhoviz"],
+        "the page holds the document and rhoviz, and nothing else"
+    );
+    TabExec::load(&k, MemDom::from_html(&html), [7; 32], &default_policy).unwrap()
+}
+
+fn text_of(tab: &TabExec<MemDom>, id: &str) -> String {
+    let n = tab.dom.backend.by_id(id).unwrap();
+    tab.dom.backend.text(n)
+}
+
+#[test]
+fn rhoviz_page_draws_its_term_and_animates_the_reduction() {
+    let mut tab = rhoviz_tab(RELAY, "*");
+    let mut t = 0;
+    // The page runs what it was given as soon as it loads.
+    for _ in 0..12 {
+        t += 16;
+        tab.frame(t);
+    }
+    let doc = tab.dom.backend.serialize();
+    assert!(doc.contains(r#"<div id="stage"><svg"#), "a picture is on the stage");
+    assert!(text_of(&tab, "note").starts_with("0 / "), "{}", text_of(&tab, "note"));
+    assert!(text_of(&tab, "term").contains("new x0, x1, x2 in"), "{}", text_of(&tab, "term"));
+
+    // Play it out: 4 steps of 2.8 s. The relay is three comms.
+    for _ in 0..900 {
+        t += 16;
+        tab.frame(t);
+    }
+    let note = text_of(&tab, "note");
+    assert!(note.starts_with("4 / 4") && note.contains("at rest after 3 comms"), "{note}");
+    assert_eq!(text_of(&tab, "term").split_whitespace().collect::<String>().len(), "u_3375c662!(Nil)".len());
+
+    // Stop the spin; with nothing moving, the page asks for no more frames.
+    let spin = tab.dom.backend.by_id("spin").unwrap();
+    tab.dispatch(spin, "click", vec![]);
+    for _ in 0..6 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(!tab.wants_frame(), "an idle picture costs nothing");
+
+    // Step back, then run a different term with a step count.
+    let prev = tab.dom.backend.by_id("prev").unwrap();
+    tab.dispatch(prev, "click", vec![]);
+    for _ in 0..6 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(text_of(&tab, "note").starts_with("3 / 4"), "{}", text_of(&tab, "note"));
+}
+
+#[test]
+fn rhoviz_reports_a_term_that_does_not_parse() {
+    let mut tab = rhoviz_tab("for(", "3");
+    let mut t = 0;
+    for _ in 0..12 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(!text_of(&tab, "note").is_empty(), "the reason is shown");
+    assert!(tab.dom.backend.serialize().contains(r#"<div id="stage"></div>"#));
+    let mut bad = rhoviz_tab("Nil", "lots");
+    for _ in 0..12 {
+        t += 16;
+        bad.frame(t);
+    }
+    assert!(text_of(&bad, "note").contains("whole number or *"), "{}", text_of(&bad, "note"));
+}
+
+/// Reducing to completion a term that has none must not stall a frame: the
+/// reduction is lazy, one frame of it per step of playback.
+#[test]
+fn rhoviz_star_on_a_divergent_term_keeps_the_frame_loop_alive() {
+    let mut tab = rhoviz_tab(gaze_rhoviz::DEFAULT_TERM, "*");
+    let mut t = 0;
+    let started = std::time::Instant::now();
+    for _ in 0..1500 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(started.elapsed().as_secs() < 20, "24 s of playback took {:?}", started.elapsed());
+    let note = text_of(&tab, "note");
+    assert!(note.contains("+ —"), "the end is not in sight: {note}");
+    assert!(tab.wants_frame());
+}
+
+/// A recorded session replays to the same documents without reducing anything.
+#[test]
+fn rhoviz_replays_from_its_log() {
+    let mut tab = rhoviz_tab(RELAY, "2");
+    let mut t = 0;
+    for _ in 0..120 {
+        t += 16;
+        tab.frame(t);
+    }
+    let live = tab.commit_hashes();
+    let log = TabLog::from_bytes(&tab.log.to_bytes()).unwrap();
+    let html = gaze_rhoviz::page_html(RELAY, "2");
+    let k = Knf::from_source(gaze_rhoviz::SCRIPT, Level::K1G, &[]).unwrap();
+    let mut again = TabExec::replay(&k, MemDom::from_html(&html), &log).unwrap();
+    let mut t = 0;
+    for _ in 0..120 {
+        t += 16;
+        again.frame(t);
+    }
+    assert_eq!(again.commit_hashes(), live);
+}
+
+const DEEP: &str = "new P, a, b in { for(s1, s2 <= P){ for(y <- s1){ P!(@Nil!(*s1), @Nil!(*s2)) | *y } | s1!( P!(@Nil!(*s1), @Nil!(*s2)) ) | for(y <- s2){ P!(@Nil!(*s1), @Nil!(*s2)) | *y } | s2!( P!(@Nil!(*s1), @Nil!(*s2)) ) } | P!(*a, *b) }";
+
+/// A growing term must leave the page able to act: the buttons answer, the
+/// button says what it will do, Reduce says it has been pressed, and the
+/// replay log does not fill with pictures.
+#[test]
+fn rhoviz_stays_responsive_on_a_growing_term() {
+    let mut tab = rhoviz_tab(DEEP, "*");
+    let mut t = 0;
+    for _ in 0..600 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(tab.dom.backend.serialize().contains(r#"<div id="stage"><svg"#));
+    assert_eq!(text_of(&tab, "play"), "pause", "while it plays, the button offers to pause");
+    assert_eq!(tab.stalled_frames(), 0, "the page's meter is never exhausted");
+    let log = tab.log.to_bytes().len();
+    assert!(log < 400_000, "ten seconds of pictures left {log} bytes in the log");
+
+    let play = tab.dom.backend.by_id("play").unwrap();
+    tab.dispatch(play, "click", vec![]);
+    for _ in 0..12 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert_eq!(text_of(&tab, "play"), "play", "paused within a few frames of the click");
+    assert!(text_of(&tab, "note").contains("(paused)"));
+    let was = text_of(&tab, "note");
+    for _ in 0..60 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert_eq!(text_of(&tab, "note"), was, "and it stays where it was paused");
+
+    let go = tab.dom.backend.by_id("go").unwrap();
+    tab.dispatch(go, "click", vec![]);
+    t += 16;
+    tab.frame(t);
+    t += 16;
+    tab.frame(t);
+    assert_eq!(text_of(&tab, "note"), "reducing…", "Reduce answers at once");
+    for _ in 0..20 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(text_of(&tab, "note").starts_with("0 / "), "then starts over: {}", text_of(&tab, "note"));
+
+    // The zoom gesture reaches the session.
+    let stage = tab.dom.backend.by_id("stage").unwrap();
+    let before = tab.dom.backend.serialize();
+    tab.dispatch(play, "click", vec![]);
+    let spin = tab.dom.backend.by_id("spin").unwrap();
+    tab.dispatch(spin, "click", vec![]);
+    for _ in 0..20 {
+        t += 16;
+        tab.frame(t);
+    }
+    let still = tab.dom.backend.serialize();
+    tab.dispatch(stage, "wheel", vec![("x".into(), Norm::int(400)), ("y".into(), Norm::int(300)), ("dx".into(), Norm::int(0)), ("dy".into(), Norm::int(200))]);
+    for _ in 0..20 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert_ne!(tab.dom.backend.serialize(), still, "a wheel event over the picture redraws it");
+    let _ = before;
+}

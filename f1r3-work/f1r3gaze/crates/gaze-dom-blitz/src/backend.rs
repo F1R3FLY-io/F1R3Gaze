@@ -407,6 +407,7 @@ impl DomBackend for BlitzDom {
             // `m` drops here: one flush for the whole frame.
         }
         let mut doc = self.doc.borrow_mut();
+        scrub_paint_tree(&mut doc);
         for (n, on) in focus {
             if !attached_in(&doc, n.id()) {
                 continue;
@@ -424,6 +425,81 @@ impl DomBackend for BlitzDom {
         let mut s = String::new();
         Self::serialize_into(&doc, doc.root_node().id, &mut s);
         s
+    }
+}
+
+/// Forget dropped nodes in the paint tree of the last layout.
+///
+/// Blitz rebuilds a node's `paint_children` (and its stacking context) only
+/// at layout, but the window hit-tests on every pointer event, and events
+/// arrive between a frame's commit and the next layout. A node dropped by
+/// this frame's writes is still listed by its old parent until then, and the
+/// hit test unwraps every id it meets. So after each batch the stale ids are
+/// removed. A slot Blitz has already reused for a new node stays: that node
+/// has no paint children of its own yet, so it is a harmless leaf.
+fn scrub_paint_tree(doc: &mut BaseDocument) {
+    let mut stale: Vec<NodeId> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    // The hit test starts at the root element; the document node above it
+    // carries no paint children.
+    let mut stack = vec![doc.root_node().id, doc.root_element().id];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(node) = doc.get_node(id) else { continue };
+        let mut dirty = false;
+        if let Some(kids) = node.paint_children.borrow().as_ref() {
+            for k in kids.iter() {
+                match doc.get_node(*k) {
+                    Some(_) => stack.push(*k),
+                    None => dirty = true,
+                }
+            }
+        }
+        if let Some(sc) = &node.stacking_context {
+            for h in sc.children.iter() {
+                match doc.get_node(h.node_id) {
+                    Some(_) => stack.push(h.node_id),
+                    None => dirty = true,
+                }
+            }
+        }
+        if dirty {
+            stale.push(id);
+        }
+    }
+    for id in stale {
+        let live = |doc: &BaseDocument, k: NodeId| doc.get_node(k).is_some();
+        let kept: Option<Vec<NodeId>> = doc.get_node(id).and_then(|n| {
+            n.paint_children.borrow().as_ref().map(|v| v.iter().copied().filter(|k| live(doc, *k)).collect())
+        });
+        let gone: Vec<(usize, bool)> = match doc.get_node(id).and_then(|n| n.stacking_context.as_ref()) {
+            Some(sc) => sc
+                .children
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| !live(doc, h.node_id))
+                .map(|(i, _)| (i, (i as u32) < sc.negative_z_count))
+                .collect(),
+            None => Vec::new(),
+        };
+        let Some(node) = doc.get_node_mut(id) else { continue };
+        if let Some(kept) = kept {
+            if let Some(v) = node.paint_children.borrow_mut().as_mut() {
+                v.clear();
+                v.extend(kept);
+            }
+        }
+        if let Some(sc) = node.stacking_context.as_mut() {
+            // Highest index first, so earlier indices stay valid.
+            for (i, negative) in gone.into_iter().rev() {
+                sc.children.remove(i);
+                if negative {
+                    sc.negative_z_count -= 1;
+                }
+            }
+        }
     }
 }
 

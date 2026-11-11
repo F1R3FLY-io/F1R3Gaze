@@ -12,7 +12,7 @@ path = "src/main.rs"
 [features]
 default = ["window"]
 # The windowed browser (winit + vello). Without it: headless tools only.
-window = ["dep:blitz-shell", "dep:anyrender_vello"]
+window = ["dep:blitz-shell", "dep:blitz-paint", "dep:anyrender_vello"]
 os-keyring = ["gaze-shard/os-keyring"]
 
 [dependencies]
@@ -20,10 +20,15 @@ blitz-dom = { workspace = true, features = ["svg", "woff", "system-fonts", "file
 blitz-html.workspace = true
 blitz-traits.workspace = true
 blitz-shell = { workspace = true, optional = true, features = ["clipboard"] }
+# The painter is a dependency of blitz-shell; it is named here only to turn on
+# `svg`. Without it the window lays SVG out and paints nothing: inline <svg>
+# (rhoviz's picture) and SVG images alike.
+blitz-paint = { workspace = true, optional = true, features = ["svg"] }
 anyrender_vello = { workspace = true, optional = true }
 gaze-broker.workspace = true
 gaze-dom-blitz.workspace = true
 gaze-exec.workspace = true
+gaze-rhoviz.workspace = true
 gaze-dom-core.workspace = true
 gaze-knf.workspace = true
 gaze-net.workspace = true

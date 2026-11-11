@@ -79,6 +79,21 @@ pub fn event_fields(d: &DomEventData) -> Vec<(String, Norm)> {
         | E::ContextMenu(p)
         | E::DoubleClick(p) => pointer(p),
         E::KeyPress(k) | E::KeyDown(k) | E::KeyUp(k) => key(k),
+        E::Wheel(w) => {
+            // Lines are turned into pixels at a nominal line height, so a
+            // page sees one unit whatever the device reported.
+            let (dx, dy) = match w.delta {
+                blitz_traits::events::BlitzWheelDelta::Lines(x, y) => (x * 40.0, y * 40.0),
+                blitz_traits::events::BlitzWheelDelta::Pixels(x, y) => (x, y),
+            };
+            vec![
+                ("x".into(), Norm::int(w.page_x().round() as i64)),
+                ("y".into(), Norm::int(w.page_y().round() as i64)),
+                ("dx".into(), Norm::int(dx.round() as i64)),
+                ("dy".into(), Norm::int(dy.round() as i64)),
+                ("mods".into(), mods(w.mods)),
+            ]
+        }
         E::Input(i) => vec![("value".into(), Norm::str(&i.value))],
         _ => Vec::new(),
     }

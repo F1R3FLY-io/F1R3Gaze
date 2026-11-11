@@ -77,6 +77,13 @@ its balance); it cannot move funds. Transfers go through Embers, as in
 F1R3Sky, but the browser decodes and checks every prepared contract against
 Embers' transfer template before signing it. Details: `docs/wallet.md`.
 
+### rhoviz
+
+`gaze://rhoviz` draws a rho term in three dimensions and animates its
+reduction: a term and a number of steps, or `*` to reduce to completion. The
+page is f1r3lang; the layout is done by a new capability, `rho:gaze:rhoviz`.
+Details: `docs/rhoviz.md`.
+
 ### Events
 
 A listener receives `(type, fields)`. `docs/events.md` lists the fields
@@ -141,7 +148,8 @@ demo page to GitHub Pages. A page opts in with
 | `gaze-graded` | §10 | the four integer semirings, xoshiro256**, argmax / argmin / proportional sampling, the ψ ⊕ ε fairness combinator, ceilings |
 | `gaze-knf` | §5 | the `.knf` container, the manifest, program and grant hashes, `integrity` strings |
 | `gaze-dom-core` | §7 | the DOM protocol engine over `DomBackend`; attenuation, verbs, fragments, frame-batched writes, capture/bubble dispatch, `decide` listeners; `MemDom` reference backend |
-| `gaze-exec` | §6, §8 | `TabExec`: grounding, apertures, `doc`/`log`/`clock`/`rand`, external capabilities routed out as requests, the frame loop, the page meter, `.gzlog` record and replay (dispatches included) |
+| `gaze-rhoviz` | — | the term visualiser: a private machine for the term, the world read back as one composition, the chromatic layout in three dimensions, lazy frames, SVG pictures, and the `gaze://rhoviz` page with its f1r3lang program |
+| `gaze-exec` | §6, §8 | `TabExec`: grounding, apertures, `doc`/`log`/`clock`/`rand`/`rhoviz`, external capabilities routed out as requests, the frame loop, the page meter, `.gzlog` record and replay (dispatches included) |
 | `gaze-dom-blitz` | §7.9, WP B1 | `BlitzDom` backend, `RhoDocument` (a Blitz `Document`: script collection, frame pacing, services), `RhoEventHandler` |
 | `gaze-broker` | §8.4, WP C2 | sites, the default policy, grant plans and prompts, remembered grants, per-tab routes with attenuation, revocation |
 | `gaze-net` | §8.5 | HTTP without ambient credentials, per-hop redirect checks, schemes, content hashes, the Blitz net provider |

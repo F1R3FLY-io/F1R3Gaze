@@ -2,12 +2,13 @@
 //!
 //! One `TabExec` per tab: a CampF1R3 machine with a keyed minter and a page
 //! meter, the DOM protocol engine, the capability services that do not need
-//! the network (`doc`, `log`, `clock`, `rand`), a recorder, and replay.
+//! the network (`doc`, `log`, `clock`, `rand`, `rhoviz`), a recorder, and replay.
 //!
 //! `frame(now)` is the whole driver and is a pure function of the executive's
 //! state, its inbox and `now`:
 //!
-//! 1. due timers and frame subscriptions join the inbox;
+//! 1. due timers, frame subscriptions and a changed `rhoviz` picture join the
+//!    inbox;
 //! 2. the inbox is ordered by (class, arrival) and each entry is recorded and
 //!    injected;
 //! 3. the machine runs for at most the frame budget, metered;
@@ -132,6 +133,7 @@ enum Cap {
     Log,
     Clock,
     Rand,
+    Rhoviz,
 }
 
 #[derive(Clone, Debug)]
@@ -180,7 +182,10 @@ pub struct Grant {
 }
 
 /// The capabilities `gaze-exec` serves by itself.
-pub const INTERNAL_CAPS: &[&str] = &["rho:gaze:doc", "rho:gaze:log", "rho:gaze:clock", "rho:gaze:rand"];
+pub const INTERNAL_CAPS: &[&str] = &["rho:gaze:doc", "rho:gaze:log", "rho:gaze:clock", "rho:gaze:rand", RHOVIZ];
+
+/// The term visualiser (`gaze-rhoviz`): pure computation, no authority.
+pub const RHOVIZ: &str = "rho:gaze:rhoviz";
 
 /// The stub broker's default policy: the internal capabilities are granted;
 /// everything else is denied here and becomes a dead channel. The native
@@ -211,6 +216,12 @@ pub struct TabExec<B: DomBackend> {
     frame_subs: Vec<Name>,
     timers: Vec<(u64, u64, Name)>,
     rng: Xoshiro,
+    /// The term being watched through `rhoviz`, and who is watching.
+    rhoviz: Option<gaze_rhoviz::Session>,
+    rhoviz_subs: Vec<Name>,
+    /// Where the page said the picture is, and how wide; it outlives any one
+    /// term.
+    rhoviz_place: Option<(i64, i64, i64)>,
     frame_budget: u64,
     sync_budget: u64,
     seed: [u8; 32],
@@ -284,6 +295,9 @@ impl<B: DomBackend> TabExec<B> {
             frame_subs: Vec::new(),
             timers: Vec::new(),
             rng: Xoshiro::new(derive(b"gaze/rand/", &seed, &[])),
+            rhoviz: None,
+            rhoviz_subs: Vec::new(),
+            rhoviz_place: None,
             frame_budget: m.frame_budget,
             sync_budget: m.sync_budget,
             seed,
@@ -355,6 +369,7 @@ impl<B: DomBackend> TabExec<B> {
                             "rho:gaze:log" => Target::Cap(Cap::Log),
                             "rho:gaze:clock" => Target::Cap(Cap::Clock),
                             "rho:gaze:rand" => Target::Cap(Cap::Rand),
+                            RHOVIZ => Target::Cap(Cap::Rhoviz),
                             _ => Target::Ext(other.to_string()),
                         };
                         // One key per capability: a second identifier for
@@ -504,6 +519,7 @@ impl<B: DomBackend> TabExec<B> {
                 Target::Cap(Cap::Log) => urn == "rho:gaze:log",
                 Target::Cap(Cap::Clock) => urn == "rho:gaze:clock",
                 Target::Cap(Cap::Rand) => urn == "rho:gaze:rand",
+                Target::Cap(Cap::Rhoviz) => urn == RHOVIZ,
                 _ => false,
             })
             .map(|(id, _)| *id)
@@ -514,6 +530,10 @@ impl<B: DomBackend> TabExec<B> {
         if urn == "rho:gaze:clock" {
             self.frame_subs.clear();
             self.timers.clear();
+        }
+        if urn == RHOVIZ {
+            self.rhoviz = None;
+            self.rhoviz_subs.clear();
         }
         for g in &mut self.grants {
             if g.urn == urn {
@@ -593,7 +613,7 @@ impl<B: DomBackend> TabExec<B> {
     /// Whether the host should schedule another frame: there is work queued,
     /// a frame subscription, or a timer. `next_deadline` says when.
     pub fn wants_frame(&self) -> bool {
-        !self.is_quiescent() || !self.frame_subs.is_empty() || !self.requests.is_empty()
+        !self.is_quiescent() || !self.frame_subs.is_empty() || !self.requests.is_empty() || self.rhoviz_active()
     }
 
     /// The earliest pending timer, in the executive's clock.
@@ -652,10 +672,44 @@ impl<B: DomBackend> TabExec<B> {
             Some(rp) => rp.injections.remove(&n).unwrap_or_default(),
             None => std::mem::take(&mut self.inbox),
         };
+
+        // A watched term's picture, when it has changed. Pictures are large
+        // and frequent, so unlike other injections they are *not* written to
+        // the log: a picture is a function of the term, of the events the
+        // page forwarded and of the frame times, all of which the log already
+        // holds, so a replay draws them again instead of reading them back.
+        // (They are made here, live and in replay alike, and sorted after
+        // every other clock-class injection of the frame.)
+        let first_picture = if self.replaying.is_some() { u64::MAX } else { self.seq + 1 };
+        if !self.rhoviz_subs.is_empty() {
+            if let Some(u) = self.rhoviz.as_mut().and_then(|s| s.advance(now_ms)) {
+                let datum = Norm::tuple(vec![
+                    Norm::str("ok"),
+                    Norm::str(&u.svg),
+                    Norm::str(&u.note),
+                    Norm::str(&u.term),
+                    Norm::str(if u.playing { "pause" } else { "play" }),
+                ]);
+                for ch in self.rhoviz_subs.clone() {
+                    if self.replaying.is_none() {
+                        self.seq += 1;
+                    }
+                    batch.push(Injection {
+                        class: Class::Timer,
+                        chan: ch,
+                        args: vec![datum.clone()],
+                        seq: if self.replaying.is_some() { u64::MAX } else { self.seq },
+                    });
+                }
+            }
+        }
         batch.sort_by_key(|i| (i.class, i.seq));
         self.log.records.push(Record::Frame { n, now_ms });
         for i in batch {
-            self.log.records.push(Record::Inject(i.clone()));
+            let picture = i.class == Class::Timer && i.seq >= first_picture && self.rhoviz_subs.contains(&i.chan);
+            if !picture {
+                self.log.records.push(Record::Inject(i.clone()));
+            }
             self.machine.inject(i.chan, i.args);
         }
 
@@ -699,6 +753,7 @@ impl<B: DomBackend> TabExec<B> {
                 }
                 Some(Target::Cap(Cap::Clock)) => self.clock(&o.args),
                 Some(Target::Cap(Cap::Rand)) => self.rand(&o.args),
+                Some(Target::Cap(Cap::Rhoviz)) => self.rhoviz(&o.args),
                 Some(Target::Ext(urn)) => {
                     if self.replaying.is_none() {
                         self.requests.push(CapRequest { urn, args: o.args });
@@ -762,6 +817,124 @@ impl<B: DomBackend> TabExec<B> {
             _ => err("verb", verb),
         };
         self.enqueue(Class::Timer, r, vec![v]);
+    }
+
+    fn rhoviz_active(&self) -> bool {
+        !self.rhoviz_subs.is_empty() && self.rhoviz.as_ref().is_some_and(|s| s.is_active())
+    }
+
+    /// The `rhoviz` capability: watch a rho term reduce.
+    ///
+    /// * `("watch", *out)`: pictures arrive on `out` as
+    ///   `("ok", svg, note, term, button)`, at most one a frame and only when
+    ///   the picture changed; `button` is `"pause"` while playback runs and
+    ///   `"play"` otherwise. A term that does not parse arrives as
+    ///   `("err", message)`.
+    /// * `("open", term, steps)`: start on `term`, a string. `steps` is a
+    ///   whole number of comm events, or `"*"` to reduce to completion.
+    /// * `("play")`, `("pause")`, `("toggle")`, `("next")`, `("prev")`,
+    ///   `("restart")`, `("spin")`, `("zoom", "in" | "out")`, `("wheel", dy)`,
+    ///   `("home")`, `("drag")`, `("fit", w)`, `("place", x, y, w)`,
+    ///   `("size", w, h)`, `("pointer", "down" | "move" | "up", x, y)`,
+    ///   `("close")`.
+    ///
+    /// The reduction runs on a private machine, a frame at a time as playback
+    /// reaches it, so reducing "to completion" a term that has none costs
+    /// the page nothing but the frames it watches.
+    fn rhoviz(&mut self, a: &[Norm]) {
+        // This runs in replay too: the session has to be driven for its
+        // pictures to be drawn again. (`enqueue` does nothing in replay, so
+        // an error reply is not sent twice.)
+        let verb = a.first().and_then(|v| v.as_str()).unwrap_or("");
+        let int = |i: usize| a.get(i).and_then(|x| x.as_int());
+        match verb {
+            "watch" => {
+                if let Some(ch) = a.get(1).and_then(as_name) {
+                    if !self.rhoviz_subs.contains(&ch) {
+                        self.rhoviz_subs.push(ch);
+                    }
+                }
+            }
+            "open" => {
+                let term = a.get(1).and_then(|x| x.as_str()).unwrap_or("");
+                let steps = match a.get(2) {
+                    Some(n) => match (n.as_int(), n.as_str()) {
+                        (Some(i), _) => Ok(gaze_rhoviz::Steps::Exactly(i.max(0) as u64)),
+                        (_, Some(s)) => gaze_rhoviz::Steps::parse(s),
+                        _ => Err("steps must be a whole number or *".to_string()),
+                    },
+                    None => Ok(gaze_rhoviz::Steps::Exactly(10)),
+                };
+                match steps.and_then(|n| gaze_rhoviz::Session::open(term, n)) {
+                    Ok(mut s) => {
+                        if let Some((x, y, w)) = self.rhoviz_place {
+                            s.place(x, y, w);
+                        }
+                        self.rhoviz = Some(s);
+                    }
+                    Err(m) => {
+                        self.rhoviz = None;
+                        let datum = Norm::tuple(vec![Norm::str("err"), Norm::str(&m)]);
+                        for ch in self.rhoviz_subs.clone() {
+                            self.enqueue(Class::Timer, ch, vec![datum.clone()]);
+                        }
+                    }
+                }
+            }
+            "close" => self.rhoviz = None,
+            // The width to draw at, in pixels; a page reads it off its own
+            // layout. Before layout there is none, and small values are noise.
+            "fit" => {
+                if let Some(w) = int(1).filter(|w| *w >= 240) {
+                    let (x, y, _) = self.rhoviz_place.unwrap_or((0, 0, w));
+                    self.rhoviz_place = Some((x, y, w));
+                    if let Some(s) = self.rhoviz.as_mut() {
+                        s.fit(w);
+                    }
+                }
+            }
+            // Where the picture is in the page, and its width: what a page
+            // reads off its own layout with `rect`.
+            "place" => {
+                if let (Some(x), Some(y), Some(w)) = (int(1), int(2), int(3).filter(|w| *w >= 240)) {
+                    self.rhoviz_place = Some((x, y, w));
+                    if let Some(s) = self.rhoviz.as_mut() {
+                        s.place(x, y, w);
+                    }
+                }
+            }
+            _ => {
+                let Some(s) = self.rhoviz.as_mut() else { return };
+                match verb {
+                    "play" => s.play(true),
+                    "pause" => s.play(false),
+                    "toggle" => s.toggle(),
+                    "next" => s.next(),
+                    "prev" => s.prev(),
+                    "restart" => s.restart(),
+                    "spin" => s.toggle_spin(),
+                    "zoom" => s.zoom_by(if a.get(1).and_then(|x| x.as_str()) == Some("out") { 1.0 / 1.5 } else { 1.5 }),
+                    "wheel" => {
+                        if let Some(dy) = int(1) {
+                            s.wheel(dy);
+                        }
+                    }
+                    "home" => s.home(),
+                    "drag" => s.toggle_drag(),
+                    "size" => {
+                        if let (Some(w), Some(h)) = (int(1), int(2)) {
+                            s.resize(w, h);
+                        }
+                    }
+                    "pointer" => {
+                        if let (Some(p), Some(x), Some(y)) = (a.get(1).and_then(|x| x.as_str()), int(2), int(3)) {
+                            s.pointer(p, x, y);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     /// The commit hashes recorded so far, one per frame.

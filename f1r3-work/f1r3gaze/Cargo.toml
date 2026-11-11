@@ -5,6 +5,7 @@ members = [
   "crates/gaze-graded",
   "crates/gaze-knf",
   "crates/gaze-dom-core",
+  "crates/gaze-rhoviz",
   "crates/gaze-exec",
   "crates/gaze-broker",
   # Native.
@@ -23,6 +24,7 @@ default-members = [
   "crates/gaze-graded",
   "crates/gaze-knf",
   "crates/gaze-dom-core",
+  "crates/gaze-rhoviz",
   "crates/gaze-exec",
   "crates/gaze-broker",
   "crates/gaze-net",
@@ -66,6 +68,7 @@ anyrender_vello = "0.14.0"
 gaze-graded = { path = "crates/gaze-graded" }
 gaze-knf = { path = "crates/gaze-knf" }
 gaze-dom-core = { path = "crates/gaze-dom-core" }
+gaze-rhoviz = { path = "crates/gaze-rhoviz" }
 gaze-exec = { path = "crates/gaze-exec" }
 gaze-broker = { path = "crates/gaze-broker" }
 gaze-net = { path = "crates/gaze-net" }
