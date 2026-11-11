@@ -15,7 +15,7 @@ const STYLE: &str = "body{font-family:system-ui,sans-serif;margin:0;padding:16px
 h1{font-size:20px;font-weight:600;margin:0 0 10px 0}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0}
 input{font:13px ui-monospace,Menlo,Consolas,monospace;padding:7px 8px;border:1px solid #b9bcc4;border-radius:6px;background:#fff}
-#src{flex:1 1 420px;min-width:240px}#steps{width:64px}
+#src{flex:1 1 420px;min-width:240px}#steps{width:64px}#play{min-width:64px}
 button{font:inherit;padding:7px 12px;border:1px solid #9aa4b5;border-radius:6px;background:#fff}
 #go{background:#0072B2;border-color:#005a8c;color:#fff}
 #note{font-weight:600;margin-top:10px}
@@ -28,28 +28,34 @@ button{font:inherit;padding:7px 12px;border:1px solid #9aa4b5;border-radius:6px;
 .muted{color:#667085;font-size:12px}";
 
 /// The page's behaviour. `doc` and `rhoviz` are its only imports.
-pub const SCRIPT: &str = r##"new out, stR, noR, teR, goR, srcR, nR in {
+pub const SCRIPT: &str = r##"new out, stR, noR, teR, plR, goR, srcR, nR, n2R in {
   rhoviz!("watch", *out) |
   doc!("query1", "#stage", *stR) | doc!("query1", "#note", *noR) | doc!("query1", "#term", *teR) |
+  doc!("query1", "#play", *plR) |
   doc!("query1", "#go", *goR) | doc!("query1", "#src", *srcR) | doc!("query1", "#steps", *nR) |
+  doc!("query1", "#note", *n2R) |
 
-  for (@("ok", *stage) <- stR & @("ok", *note) <- noR & @("ok", *term) <- teR) {
-    for (@("ok", svg, n, t) <= out) { stage!("setHTML", svg) | note!("setText", n) | term!("setText", t) } |
+  for (@("ok", *stage) <- stR & @("ok", *note) <- noR & @("ok", *term) <- teR & @("ok", *play) <- plR) {
+    for (@("ok", svg, n, t, b) <= out) {
+      stage!("setHTML", svg) | note!("setText", n) | term!("setText", t) | play!("setText", b)
+    } |
     for (@("err", m) <= out) { note!("setText", m) | term!("setText", "") | stage!("setHTML", "") } |
-    new down, move, up, s1, s2, s3 in {
+    new down, move, up, wheel, s1, s2, s3, s4 in {
       stage!("listen", "pointerdown", *down, {}, *s1) |
       stage!("listen", "pointermove", *move, {}, *s2) |
       stage!("listen", "pointerup", *up, {}, *s3) |
+      stage!("listen", "wheel", *wheel, {"prevent": true}, *s4) |
       for (@(_, {"x": x, "y": y ..._}) <= down) { rhoviz!("pointer", "down", x, y) } |
       for (@(_, {"x": x, "y": y ..._}) <= move) { rhoviz!("pointer", "move", x, y) } |
-      for (@(_, {"x": x, "y": y ..._}) <= up)   { rhoviz!("pointer", "up", x, y) }
+      for (@(_, {"x": x, "y": y ..._}) <= up)   { rhoviz!("pointer", "up", x, y) } |
+      for (@(_, {"x": x, "y": y, "dy": dy ..._}) <= wheel) { rhoviz!("pointer", "move", x, y) | rhoviz!("wheel", dy) }
     }
   } |
 
-  for (@("ok", *go) <- goR & @("ok", *src) <- srcR & @("ok", *steps) <- nR) {
+  for (@("ok", *go) <- goR & @("ok", *src) <- srcR & @("ok", *steps) <- nR & @("ok", *note) <- n2R) {
     new run, clicks, sub in {
       go!("listen", "click", *clicks, {}, *sub) |
-      for (_ <= clicks) { run!(Nil) } |
+      for (_ <= clicks) { note!("setText", "reducing…") | run!(Nil) } |
       run!(Nil) |
       for (_ <= run) {
         new a, b in {
@@ -58,7 +64,7 @@ pub const SCRIPT: &str = r##"new out, stR, noR, teR, goR, srcR, nR in {
         } |
         new box, sz in {
           doc!("query1", "#stage", *box) |
-          for (@("ok", *st) <- box) { st!("rect", *sz) | for (@("ok", (_, _, w, _)) <- sz) { rhoviz!("fit", w) } }
+          for (@("ok", *st) <- box) { st!("rect", *sz) | for (@("ok", (x, y, w, _)) <- sz) { rhoviz!("place", x, y, w) } }
         }
       }
     }
@@ -70,7 +76,9 @@ pub const SCRIPT: &str = r##"new out, stR, noR, teR, goR, srcR, nR in {
   new r, c, s in { doc!("query1", "#again", *r) | for (@("ok", *b) <- r) { b!("listen", "click", *c, {}, *s) | for (_ <= c) { rhoviz!("restart") } } } |
   new r, c, s in { doc!("query1", "#spin", *r) | for (@("ok", *b) <- r) { b!("listen", "click", *c, {}, *s) | for (_ <= c) { rhoviz!("spin") } } } |
   new r, c, s in { doc!("query1", "#zin", *r) | for (@("ok", *b) <- r) { b!("listen", "click", *c, {}, *s) | for (_ <= c) { rhoviz!("zoom", "in") } } } |
-  new r, c, s in { doc!("query1", "#zout", *r) | for (@("ok", *b) <- r) { b!("listen", "click", *c, {}, *s) | for (_ <= c) { rhoviz!("zoom", "out") } } }
+  new r, c, s in { doc!("query1", "#zout", *r) | for (@("ok", *b) <- r) { b!("listen", "click", *c, {}, *s) | for (_ <= c) { rhoviz!("zoom", "out") } } } |
+  new r, c, s in { doc!("query1", "#home", *r) | for (@("ok", *b) <- r) { b!("listen", "click", *c, {}, *s) | for (_ <= c) { rhoviz!("home") } } } |
+  new r, c, s in { doc!("query1", "#drag", *r) | for (@("ok", *b) <- r) { b!("listen", "click", *c, {}, *s) | for (_ <= c) { rhoviz!("drag") } } }
 }"##;
 
 fn attr(s: &str) -> String {
@@ -90,9 +98,10 @@ pub fn page_html(term: &str, steps: &str) -> String {
 </div>
 <div class="muted">A rho term, and how many comm events to animate. <b>*</b> reduces to completion: caveat emptor, a term need not have one. Frames are computed as playback reaches them, so a term that never rests plays for as long as you watch.</div>
 <div class="row">
-  <button id="prev">◀◀</button><button id="play">play / pause</button><button id="next">▶▶</button>
+  <button id="prev">◀◀</button><button id="play">pause</button><button id="next">▶▶</button>
   <button id="again">restart</button><button id="spin">spin</button><button id="zin">+</button><button id="zout">−</button>
-  <span class="muted">drag the picture to turn it</span>
+  <button id="home">whole figure</button><button id="drag">drag: turn / move</button>
+  <span class="muted">scroll over the picture to zoom in on what is under the pointer</span>
 </div>
 <div id="note"></div>
 <div id="term"></div>

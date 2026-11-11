@@ -118,3 +118,85 @@ fn bad_input_is_an_error_not_a_panic() {
     assert_eq!(Steps::parse(" * "), Ok(Steps::All));
     assert_eq!(Steps::parse("12"), Ok(Steps::Exactly(12)));
 }
+
+/// The contract form of a recursive definition: deep, and it grows.
+const DEEP: &str = "new P, a, b in { for(s1, s2 <= P){ for(y <- s1){ P!(@Nil!(*s1), @Nil!(*s2)) | *y } | s1!( P!(@Nil!(*s1), @Nil!(*s2)) ) | for(y <- s2){ P!(@Nil!(*s1), @Nil!(*s2)) | *y } | s2!( P!(@Nil!(*s1), @Nil!(*s2)) ) } | P!(*a, *b) }";
+
+/// No two spokes cross or overlap: with axis-parallel spokes, two of them
+/// can only meet at a common endpoint.
+fn assert_spokes_disjoint(f: &Frame) {
+    let segs: Vec<([f64; 3], [f64; 3])> =
+        f.hubs.iter().filter(|h| h.parent >= 0).map(|h| (f.hubs[h.parent as usize].pos, h.pos)).collect();
+    let within = |x: f64, a: f64, b: f64| x > a.min(b) - 1e-9 && x < a.max(b) + 1e-9;
+    for (i, (a0, a1)) in segs.iter().enumerate() {
+        let ka = (0..3).find(|&k| (a0[k] - a1[k]).abs() > 1e-9).unwrap();
+        for (b0, b1) in &segs[i + 1..] {
+            let kb = (0..3).find(|&k| (b0[k] - b1[k]).abs() > 1e-9).unwrap();
+            // A common point p: on a, so p = a0 off axis ka; on b likewise.
+            let mut p = *a0;
+            let meet = if ka == kb {
+                (0..3).all(|k| k == ka || (a0[k] - b0[k]).abs() < 1e-9) && {
+                    let (lo, hi) = (a0[ka].min(a1[ka]).max(b0[ka].min(b1[ka])), a0[ka].max(a1[ka]).min(b0[ka].max(b1[ka])));
+                    p[ka] = lo;
+                    lo <= hi + 1e-9
+                }
+            } else {
+                p[ka] = b0[ka];
+                (0..3).all(|k| k == ka || k == kb || (a0[k] - b0[k]).abs() < 1e-9)
+                    && within(b0[ka], a0[ka], a1[ka])
+                    && within(a0[kb], b0[kb], b1[kb])
+            };
+            if meet {
+                let end = |q: &[f64; 3]| (0..3).all(|k| (q[k] - p[k]).abs() < 1e-9);
+                let shared = (end(a0) || end(a1)) && (end(b0) || end(b1));
+                let overlap = ka == kb && (a0[ka].max(a1[ka]).min(b0[ka].max(b1[ka])) - a0[ka].min(a1[ka]).max(b0[ka].min(b1[ka]))) > 1e-9;
+                assert!(shared && !overlap, "two spokes meet away from a shared hub");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_deep_term_stays_a_reasonable_size_and_an_embedding() {
+    let mut s = Session::open(DEEP, Steps::Exactly(12)).unwrap();
+    run_out(&mut s);
+    for f in s.frames() {
+        assert_spokes_disjoint(f);
+        let n = f.hubs.len() as f64;
+        assert!(f.extent < 1.5 * n, "extent {} for {} hubs: size is a sum over parts, not a power of depth", f.extent, n);
+        for (i, a) in f.hubs.iter().enumerate() {
+            for b in &f.hubs[i + 1..] {
+                assert!((0..3).any(|k| (a.pos[k] - b.pos[k]).abs() > 1e-9), "two hubs coincide");
+            }
+        }
+    }
+    assert!(s.frames().last().unwrap().hubs.len() > 300);
+}
+
+#[test]
+fn pictures_are_rationed_and_the_wheel_zooms_about_the_pointer() {
+    let mut s = Session::open(DEEP, Steps::All).unwrap();
+    let mut sent = 0;
+    for i in 0..=125u64 {
+        sent += s.advance(i * 16).is_some() as u32;
+    }
+    assert!((15..=62).contains(&sent), "{sent} pictures in two seconds of sixty frames a second");
+
+    // Zooming about a point leaves that point of the figure where it was.
+    let mut z = Session::open(RELAY, Steps::Exactly(0)).unwrap();
+    z.toggle_spin();
+    z.place(100, 200, 900);
+    z.pointer("move", 100 + 700, 200 + 150);
+    let before = (z.zoom, z.pan);
+    z.wheel(120);
+    assert!(z.zoom > before.0, "scrolling one way zooms in");
+    let (ux, uy) = (700.0 - 450.0, 150.0 - z.size.1 / 2.0);
+    let f = z.zoom / before.0;
+    assert!((z.pan.0 - (ux - (ux - before.1 .0) * f)).abs() < 1e-9 && (z.pan.1 - (uy - (uy - before.1 .1) * f)).abs() < 1e-9);
+    z.wheel(-120);
+    assert!((z.zoom - before.0).abs() < 1e-9 && z.pan.0.abs() < 1e-9 && z.pan.1.abs() < 1e-9, "and back again");
+    z.zoom_by(40.0);
+    assert!(z.update().svg.len() < 4_000, "zoomed far in, what is off the picture is not drawn");
+    z.home();
+    assert_eq!((z.zoom, z.pan), (1.0, (0.0, 0.0)));
+}

@@ -333,9 +333,22 @@ fn rhoviz_survives_the_window_pointer_moves_drags_and_clicks() {
     }
     turn(&mut d, 0, &[UiEvent::PointerUp(pointer(sx + 120.0, sy + 40.0, false))]);
 
+    // Scroll over the picture: the zoom gesture, which must not scroll the page.
+    for i in 0..6u32 {
+        let w = blitz_traits::events::BlitzWheelEvent {
+            delta: blitz_traits::events::BlitzWheelDelta::Pixels(0.0, 60.0),
+            coords: pointer(sx, sy, false).coords,
+            buttons: blitz_traits::events::MouseEventButtons::None,
+            mods: Default::default(),
+            element: Default::default(),
+        };
+        turn(&mut d, i, &[UiEvent::Wheel(w)]);
+    }
+    assert_eq!(base.borrow().viewport_scroll().y, 0.0, "the page did not scroll under the gesture");
+
     // Click pause, then step: the caption must say so.
     base.borrow_mut().resolve(0.0);
-    for id in ["play", "next", "spin", "zin", "zout", "prev", "again", "go"] {
+    for id in ["play", "next", "spin", "zin", "zout", "home", "drag", "prev", "again", "go"] {
         let (x, y) = centre(id);
         turn(&mut d, 0, &[UiEvent::PointerMove(pointer(x, y, false))]);
         turn(&mut d, 0, &[UiEvent::PointerDown(pointer(x, y, true))]);

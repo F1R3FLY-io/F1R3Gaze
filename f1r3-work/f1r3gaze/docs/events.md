@@ -32,6 +32,7 @@ control.
 | `click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`, `pointercancel`, `pointerenter`, `pointerleave`, `pointerover`, `pointerout`, `mousedown`, `mouseup`, `mousemove`, `mouseenter`, `mouseleave`, `mouseover`, `mouseout`, `touchstart`, `touchmove`, `touchend`, `touchcancel` | `x`, `y`: page coordinates, integers; `button`: integer; `mods`: list of `"shift"`, `"ctrl"`, `"alt"`, `"meta"` |
 | `keydown`, `keyup`, `keypress` | `key`, `code`: strings as in UI Events; `mods`: as above; `repeat`: boolean |
 | `input` | `value`: the control's current value, a string |
+| `wheel` | `x`, `y`: page coordinates; `dx`, `dy`: the scroll in pixels, integers (a device that reports lines is converted at 40 pixels a line); `mods`: as above |
 
 All numbers are integers: no field carries a float, so every host delivers
 bit-identical values and replay stays exact.

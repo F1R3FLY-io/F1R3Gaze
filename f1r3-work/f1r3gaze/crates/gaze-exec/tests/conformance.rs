@@ -356,3 +356,70 @@ fn rhoviz_replays_from_its_log() {
     }
     assert_eq!(again.commit_hashes(), live);
 }
+
+const DEEP: &str = "new P, a, b in { for(s1, s2 <= P){ for(y <- s1){ P!(@Nil!(*s1), @Nil!(*s2)) | *y } | s1!( P!(@Nil!(*s1), @Nil!(*s2)) ) | for(y <- s2){ P!(@Nil!(*s1), @Nil!(*s2)) | *y } | s2!( P!(@Nil!(*s1), @Nil!(*s2)) ) } | P!(*a, *b) }";
+
+/// A growing term must leave the page able to act: the buttons answer, the
+/// button says what it will do, Reduce says it has been pressed, and the
+/// replay log does not fill with pictures.
+#[test]
+fn rhoviz_stays_responsive_on_a_growing_term() {
+    let mut tab = rhoviz_tab(DEEP, "*");
+    let mut t = 0;
+    for _ in 0..600 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(tab.dom.backend.serialize().contains(r#"<div id="stage"><svg"#));
+    assert_eq!(text_of(&tab, "play"), "pause", "while it plays, the button offers to pause");
+    assert_eq!(tab.stalled_frames(), 0, "the page's meter is never exhausted");
+    let log = tab.log.to_bytes().len();
+    assert!(log < 400_000, "ten seconds of pictures left {log} bytes in the log");
+
+    let play = tab.dom.backend.by_id("play").unwrap();
+    tab.dispatch(play, "click", vec![]);
+    for _ in 0..12 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert_eq!(text_of(&tab, "play"), "play", "paused within a few frames of the click");
+    assert!(text_of(&tab, "note").contains("(paused)"));
+    let was = text_of(&tab, "note");
+    for _ in 0..60 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert_eq!(text_of(&tab, "note"), was, "and it stays where it was paused");
+
+    let go = tab.dom.backend.by_id("go").unwrap();
+    tab.dispatch(go, "click", vec![]);
+    t += 16;
+    tab.frame(t);
+    t += 16;
+    tab.frame(t);
+    assert_eq!(text_of(&tab, "note"), "reducing…", "Reduce answers at once");
+    for _ in 0..20 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert!(text_of(&tab, "note").starts_with("0 / "), "then starts over: {}", text_of(&tab, "note"));
+
+    // The zoom gesture reaches the session.
+    let stage = tab.dom.backend.by_id("stage").unwrap();
+    let before = tab.dom.backend.serialize();
+    tab.dispatch(play, "click", vec![]);
+    let spin = tab.dom.backend.by_id("spin").unwrap();
+    tab.dispatch(spin, "click", vec![]);
+    for _ in 0..20 {
+        t += 16;
+        tab.frame(t);
+    }
+    let still = tab.dom.backend.serialize();
+    tab.dispatch(stage, "wheel", vec![("x".into(), Norm::int(400)), ("y".into(), Norm::int(300)), ("dx".into(), Norm::int(0)), ("dy".into(), Norm::int(200))]);
+    for _ in 0..20 {
+        t += 16;
+        tab.frame(t);
+    }
+    assert_ne!(tab.dom.backend.serialize(), still, "a wheel event over the picture redraws it");
+    let _ = before;
+}

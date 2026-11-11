@@ -219,8 +219,9 @@ pub struct TabExec<B: DomBackend> {
     /// The term being watched through `rhoviz`, and who is watching.
     rhoviz: Option<gaze_rhoviz::Session>,
     rhoviz_subs: Vec<Name>,
-    /// The width the page asked for; it outlives any one term.
-    rhoviz_width: Option<i64>,
+    /// Where the page said the picture is, and how wide; it outlives any one
+    /// term.
+    rhoviz_place: Option<(i64, i64, i64)>,
     frame_budget: u64,
     sync_budget: u64,
     seed: [u8; 32],
@@ -296,7 +297,7 @@ impl<B: DomBackend> TabExec<B> {
             rng: Xoshiro::new(derive(b"gaze/rand/", &seed, &[])),
             rhoviz: None,
             rhoviz_subs: Vec::new(),
-            rhoviz_width: None,
+            rhoviz_place: None,
             frame_budget: m.frame_budget,
             sync_budget: m.sync_budget,
             seed,
@@ -666,27 +667,49 @@ impl<B: DomBackend> TabExec<B> {
             );
         }
 
-        // A watched term's picture, when it has changed. Like every other
-        // injection it is recorded, so a replay shows the same pictures
-        // without reducing anything.
-        if self.replaying.is_none() && !self.rhoviz_subs.is_empty() {
-            if let Some(u) = self.rhoviz.as_mut().and_then(|s| s.advance(now_ms)) {
-                let datum = Norm::tuple(vec![Norm::str("ok"), Norm::str(&u.svg), Norm::str(&u.note), Norm::str(&u.term)]);
-                for ch in self.rhoviz_subs.clone() {
-                    self.enqueue(Class::Timer, ch, vec![datum.clone()]);
-                }
-            }
-        }
-
         // 2. Order, record, inject.
         let mut batch: Vec<Injection> = match &mut self.replaying {
             Some(rp) => rp.injections.remove(&n).unwrap_or_default(),
             None => std::mem::take(&mut self.inbox),
         };
+
+        // A watched term's picture, when it has changed. Pictures are large
+        // and frequent, so unlike other injections they are *not* written to
+        // the log: a picture is a function of the term, of the events the
+        // page forwarded and of the frame times, all of which the log already
+        // holds, so a replay draws them again instead of reading them back.
+        // (They are made here, live and in replay alike, and sorted after
+        // every other clock-class injection of the frame.)
+        let first_picture = if self.replaying.is_some() { u64::MAX } else { self.seq + 1 };
+        if !self.rhoviz_subs.is_empty() {
+            if let Some(u) = self.rhoviz.as_mut().and_then(|s| s.advance(now_ms)) {
+                let datum = Norm::tuple(vec![
+                    Norm::str("ok"),
+                    Norm::str(&u.svg),
+                    Norm::str(&u.note),
+                    Norm::str(&u.term),
+                    Norm::str(if u.playing { "pause" } else { "play" }),
+                ]);
+                for ch in self.rhoviz_subs.clone() {
+                    if self.replaying.is_none() {
+                        self.seq += 1;
+                    }
+                    batch.push(Injection {
+                        class: Class::Timer,
+                        chan: ch,
+                        args: vec![datum.clone()],
+                        seq: if self.replaying.is_some() { u64::MAX } else { self.seq },
+                    });
+                }
+            }
+        }
         batch.sort_by_key(|i| (i.class, i.seq));
         self.log.records.push(Record::Frame { n, now_ms });
         for i in batch {
-            self.log.records.push(Record::Inject(i.clone()));
+            let picture = i.class == Class::Timer && i.seq >= first_picture && self.rhoviz_subs.contains(&i.chan);
+            if !picture {
+                self.log.records.push(Record::Inject(i.clone()));
+            }
             self.machine.inject(i.chan, i.args);
         }
 
@@ -803,23 +826,25 @@ impl<B: DomBackend> TabExec<B> {
     /// The `rhoviz` capability: watch a rho term reduce.
     ///
     /// * `("watch", *out)`: pictures arrive on `out` as
-    ///   `("ok", svg, note, term)`, one each frame in which the picture
-    ///   changed; a term that does not parse arrives as `("err", message)`.
+    ///   `("ok", svg, note, term, button)`, at most one a frame and only when
+    ///   the picture changed; `button` is `"pause"` while playback runs and
+    ///   `"play"` otherwise. A term that does not parse arrives as
+    ///   `("err", message)`.
     /// * `("open", term, steps)`: start on `term`, a string. `steps` is a
     ///   whole number of comm events, or `"*"` to reduce to completion.
     /// * `("play")`, `("pause")`, `("toggle")`, `("next")`, `("prev")`,
-    ///   `("restart")`, `("spin")`, `("zoom", "in" | "out")`,
-    ///   `("fit", w)`, `("size", w, h)`,
-    ///   `("pointer", "down" | "move" | "up", x, y)`,
+    ///   `("restart")`, `("spin")`, `("zoom", "in" | "out")`, `("wheel", dy)`,
+    ///   `("home")`, `("drag")`, `("fit", w)`, `("place", x, y, w)`,
+    ///   `("size", w, h)`, `("pointer", "down" | "move" | "up", x, y)`,
     ///   `("close")`.
     ///
     /// The reduction runs on a private machine, a frame at a time as playback
     /// reaches it, so reducing "to completion" a term that has none costs
     /// the page nothing but the frames it watches.
     fn rhoviz(&mut self, a: &[Norm]) {
-        if self.replaying.is_some() {
-            return; // in replay, the pictures come from the log
-        }
+        // This runs in replay too: the session has to be driven for its
+        // pictures to be drawn again. (`enqueue` does nothing in replay, so
+        // an error reply is not sent twice.)
         let verb = a.first().and_then(|v| v.as_str()).unwrap_or("");
         let int = |i: usize| a.get(i).and_then(|x| x.as_int());
         match verb {
@@ -842,8 +867,8 @@ impl<B: DomBackend> TabExec<B> {
                 };
                 match steps.and_then(|n| gaze_rhoviz::Session::open(term, n)) {
                     Ok(mut s) => {
-                        if let Some(w) = self.rhoviz_width {
-                            s.fit(w);
+                        if let Some((x, y, w)) = self.rhoviz_place {
+                            s.place(x, y, w);
                         }
                         self.rhoviz = Some(s);
                     }
@@ -861,9 +886,20 @@ impl<B: DomBackend> TabExec<B> {
             // layout. Before layout there is none, and small values are noise.
             "fit" => {
                 if let Some(w) = int(1).filter(|w| *w >= 240) {
-                    self.rhoviz_width = Some(w);
+                    let (x, y, _) = self.rhoviz_place.unwrap_or((0, 0, w));
+                    self.rhoviz_place = Some((x, y, w));
                     if let Some(s) = self.rhoviz.as_mut() {
                         s.fit(w);
+                    }
+                }
+            }
+            // Where the picture is in the page, and its width: what a page
+            // reads off its own layout with `rect`.
+            "place" => {
+                if let (Some(x), Some(y), Some(w)) = (int(1), int(2), int(3).filter(|w| *w >= 240)) {
+                    self.rhoviz_place = Some((x, y, w));
+                    if let Some(s) = self.rhoviz.as_mut() {
+                        s.place(x, y, w);
                     }
                 }
             }
@@ -877,7 +913,14 @@ impl<B: DomBackend> TabExec<B> {
                     "prev" => s.prev(),
                     "restart" => s.restart(),
                     "spin" => s.toggle_spin(),
-                    "zoom" => s.zoom_by(if a.get(1).and_then(|x| x.as_str()) == Some("out") { 1.0 / 1.25 } else { 1.25 }),
+                    "zoom" => s.zoom_by(if a.get(1).and_then(|x| x.as_str()) == Some("out") { 1.0 / 1.5 } else { 1.5 }),
+                    "wheel" => {
+                        if let Some(dy) = int(1) {
+                            s.wheel(dy);
+                        }
+                    }
+                    "home" => s.home(),
+                    "drag" => s.toggle_drag(),
                     "size" => {
                         if let (Some(w), Some(h)) = (int(1), int(2)) {
                             s.resize(w, h);

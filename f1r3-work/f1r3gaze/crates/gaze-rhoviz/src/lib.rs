@@ -9,9 +9,12 @@
 //!
 //! **The figure** is the chromatic realisation of the term's syntax tree: the
 //! constructor of a node is its colour, the position of an argument is one of
-//! three orthogonal axes, and a node whose largest child has radius `r` puts
-//! its children at distance `sqrt(2) r + 1` along those axes. Sibling figures
-//! then lie in disjoint balls and no two spokes meet except at a shared hub.
+//! three orthogonal axes, and child `i` sits along axis `i` just past the
+//! reach of its siblings along that axis. Every figure lies in the positive
+//! orthant of its own hub, so sibling figures are disjoint and no two spokes
+//! meet except at a shared hub; and because a child is moved only as far as
+//! its siblings actually reach, a figure's size is a sum over its parts, not
+//! a power of its depth.
 //!
 //! **The reduction** is run by a private CampF1R3 machine, one component per
 //! tick. After each tick the whole world is read back as one parallel
@@ -73,41 +76,72 @@ struct V {
     kind: &'static str,
     label: String,
     kids: Vec<V>,
+    /// How far the figure reaches along each axis from its hub.
+    ext: [f64; 3],
 }
 
 fn leaf(kind: &'static str, label: impl Into<String>) -> V {
-    V { kind, label: label.into(), kids: Vec::new() }
+    V { kind, label: label.into(), kids: Vec::new(), ext: [0.0; 3] }
+}
+
+/// A node over `kids`, measured.
+fn node(kind: &'static str, label: impl Into<String>, kids: Vec<V>) -> V {
+    let exts: Vec<[f64; 3]> = kids.iter().map(|k| k.ext).collect();
+    let (_, ext) = arrange(&exts);
+    V { kind, label: label.into(), kids, ext }
+}
+
+/// Where the children of one node go, and how far the whole then reaches.
+///
+/// Child `i` goes along axis `i` to just past the furthest any *sibling*
+/// reaches along that axis. Then no sibling has a point with coordinate `i`
+/// as large as child `i`'s smallest, so the figures are disjoint; a spoke
+/// lies on an axis where every other child has a positive coordinate, so it
+/// meets none of them; and it reaches its own child from below, where that
+/// child, lying in the positive orthant of its hub, has nothing.
+fn arrange(kids: &[[f64; 3]]) -> (Vec<f64>, [f64; 3]) {
+    let mut ext = [0.0f64; 3];
+    let mut at = Vec::with_capacity(kids.len());
+    for i in 0..kids.len() {
+        let others = kids.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, e)| e[i]).fold(0.0, f64::max);
+        at.push(others + GAP);
+    }
+    for (j, e) in kids.iter().enumerate() {
+        for k in 0..3 {
+            ext[k] = ext[k].max(e[k] + if j == k { at[j] } else { 0.0 });
+        }
+    }
+    (at, ext)
 }
 
 /// A sequence as a right-nested chain of `list` nodes: (head, rest).
 fn chain(mut xs: Vec<V>, label: &str) -> V {
     let Some(mut acc) = xs.pop() else { return leaf("list", label) };
     if xs.is_empty() && label != "," {
-        return V { kind: "list", label: label.into(), kids: vec![acc] };
+        return node("list", label, vec![acc]);
     }
     while let Some(x) = xs.pop() {
-        acc = V { kind: "list", label: label.into(), kids: vec![x, acc] };
+        acc = node("list", label, vec![x, acc]);
     }
     acc
 }
 
 /// Parallel composition is associative, so the bracketing is ours to choose.
-/// A balanced tree keeps the height, and so the radius, logarithmic in the
-/// number of components where a right-nested comb would make it linear.
+/// A balanced tree keeps the spine short.
 fn balanced(mut xs: Vec<V>) -> V {
     match xs.len() {
         0 => leaf("nil", "Nil"),
         1 => xs.pop().unwrap(),
         n => {
             let right = xs.split_off(n.div_ceil(2));
-            V { kind: "par", label: "|".into(), kids: vec![balanced(xs), balanced(right)] }
+            node("par", "|", vec![balanced(xs), balanced(right)])
         }
     }
 }
 
 fn name_tree(n: &Name) -> V {
     match n {
-        Name::Quote(p) => V { kind: "quote", label: "@".into(), kids: vec![proc_tree(p)] },
+        Name::Quote(p) => node("quote", "@", vec![proc_tree(p)]),
         Name::Bound(i) => leaf("var", format!("n{i}")),
         Name::Free(l) => leaf("var", format!("f{l}")),
         Name::Unforgeable(b) => leaf("unf", format!("u_{:02x}{:02x}{:02x}{:02x}", b[0], b[1], b[2], b[3])),
@@ -134,7 +168,7 @@ fn proc_tree(t: &Norm) -> V {
             if !args.is_empty() {
                 kids.push(chain(args.iter().map(proc_tree).collect(), ","));
             }
-            V { kind: "send", label: if *persistent { "!!" } else { "!" }.into(), kids }
+            node("send", if *persistent { "!!" } else { "!" }, kids)
         }
         Node::Receive { binds, body } => {
             // A join is a chain of receipt nodes, one per bind, ending in the
@@ -147,16 +181,12 @@ fn proc_tree(t: &Norm) -> V {
                     chain(b.pats.iter().map(name_tree).collect(), ",")
                 };
                 let head = if i == 0 { "for" } else { "&" };
-                acc = V {
-                    kind: "recv",
-                    label: format!("{head} {}", b.kind.arrow()),
-                    kids: vec![pats, name_tree(&b.chan), acc],
-                };
+                acc = node("recv", format!("{head} {}", b.kind.arrow()), vec![pats, name_tree(&b.chan), acc]);
             }
             acc
         }
-        Node::New { count, body } => V { kind: "new", label: format!("new {count}"), kids: vec![proc_tree(body)] },
-        Node::Eval(n) => V { kind: "drop", label: "*".into(), kids: vec![name_tree(n)] },
+        Node::New { count, body } => node("new", format!("new {count}"), vec![proc_tree(body)]),
+        Node::Eval(n) => node("drop", "*", vec![name_tree(n)]),
         Node::BoundVar(i) => leaf("var", format!("p{i}")),
         Node::FreeVar(l) => leaf("var", format!("P{l}")),
         Node::Wild => leaf("var", "_"),
@@ -193,27 +223,15 @@ pub struct Hub {
     pub flag: u8,
 }
 
-/// Radius of a figure about its hub: 0 for a leaf, else `lambda + r_max`.
-fn radius(v: &V) -> f64 {
-    if v.kids.is_empty() {
-        return 0.0;
-    }
-    let rmax = v.kids.iter().map(radius).fold(0.0, f64::max);
-    2f64.sqrt() * rmax + GAP + rmax
-}
-
 /// Place `v` with its hub at `at`; child `i` goes along axis `i`.
 fn place(v: &V, id: String, at: [f64; 3], parent: i64, flag: u8, out: &mut Vec<Hub>) {
     let me = out.len() as i64;
     out.push(Hub { id: id.clone(), kind: v.kind, label: v.label.clone(), pos: at, parent, flag });
-    if v.kids.is_empty() {
-        return;
-    }
-    let rmax = v.kids.iter().map(radius).fold(0.0, f64::max);
-    let lambda = 2f64.sqrt() * rmax + GAP;
+    let exts: Vec<[f64; 3]> = v.kids.iter().map(|k| k.ext).collect();
+    let (lambda, _) = arrange(&exts);
     for (i, k) in v.kids.iter().enumerate() {
         let mut p = at;
-        p[i] += lambda;
+        p[i] += lambda[i];
         place(k, format!("{id}.{i}"), p, me, flag, out);
     }
 }
@@ -221,19 +239,17 @@ fn place(v: &V, id: String, at: [f64; 3], parent: i64, flag: u8, out: &mut Vec<H
 struct Slot<'a> {
     id: &'a str,
     tree: V,
-    r: f64,
     flag: u8,
 }
 
-/// The radius a balanced par over `slots` would have.
-fn spine_radius(slots: &[Slot]) -> f64 {
+/// How far a balanced par over `slots` would reach.
+fn spine_extent(slots: &[Slot]) -> [f64; 3] {
     match slots.len() {
-        0 => 0.0,
-        1 => slots[0].r,
+        0 => [0.0; 3],
+        1 => slots[0].tree.ext,
         n => {
             let (l, r) = slots.split_at(n.div_ceil(2));
-            let rmax = spine_radius(l).max(spine_radius(r));
-            2f64.sqrt() * rmax + GAP + rmax
+            arrange(&[spine_extent(l), spine_extent(r)]).1
         }
     }
 }
@@ -247,13 +263,12 @@ fn spine(slots: &[Slot], path: String, at: [f64; 3], parent: i64, out: &mut Vec<
         1 => place(&slots[0].tree, slots[0].id.to_string(), at, parent, slots[0].flag, out),
         n => {
             let (l, r) = slots.split_at(n.div_ceil(2));
-            let rmax = spine_radius(l).max(spine_radius(r));
-            let lambda = 2f64.sqrt() * rmax + GAP;
+            let (lambda, _) = arrange(&[spine_extent(l), spine_extent(r)]);
             let me = out.len() as i64;
             out.push(Hub { id: format!("top{path}"), kind: "par", label: "|".into(), pos: at, parent, flag: 0 });
             for (i, half) in [l, r].into_iter().enumerate() {
                 let mut p = at;
-                p[i] += lambda;
+                p[i] += lambda[i];
                 spine(half, format!("{path}.{i}"), p, me, out);
             }
         }
@@ -369,9 +384,7 @@ impl Frame {
             .map(|(id, t)| {
                 let leaving = after.is_some_and(|s| !s.contains(id));
                 let arrived = before.is_some_and(|s| !s.contains(id));
-                let tree = proc_tree(t);
-                let r = radius(&tree);
-                Slot { id, tree, r, flag: leaving as u8 | (arrived as u8) << 1 }
+                Slot { id, tree: proc_tree(t), flag: leaving as u8 | (arrived as u8) << 1 }
             })
             .collect();
         let keep: HashMap<String, u8> = self.hubs.iter().map(|h| (h.id.clone(), h.flag)).collect();
@@ -430,6 +443,8 @@ pub struct Update {
     pub svg: String,
     pub note: String,
     pub term: String,
+    /// Whether playback is running, for a page to label its button by.
+    pub playing: bool,
 }
 
 /// One term being watched: its machine, the frames reached so far, and the
@@ -447,9 +462,20 @@ pub struct Session {
     yaw: f64,
     pitch: f64,
     zoom: f64,
+    /// Where the figure's centre is drawn, in pixels from the picture's centre.
+    pan: (f64, f64),
     size: (f64, f64),
+    /// The picture's top-left corner in the page, to place pointer events.
+    origin: (f64, f64),
+    /// The pointer, in the picture's own pixels, when it was last seen.
+    cursor: Option<(f64, f64)>,
     drag: Option<(i64, i64)>,
+    /// Whether a drag moves the figure (true) or turns it (false).
+    drag_moves: bool,
     last_now: Option<u64>,
+    /// When a picture was last sent, and how large it was.
+    last_emit: Option<u64>,
+    last_bytes: usize,
     dirty: bool,
 }
 
@@ -479,9 +505,15 @@ impl Session {
             yaw: -0.7,
             pitch: 0.5,
             zoom: 1.0,
+            pan: (0.0, 0.0),
             size: (900.0, 520.0),
+            origin: (0.0, 0.0),
+            cursor: None,
             drag: None,
+            drag_moves: false,
             last_now: None,
+            last_emit: None,
+            last_bytes: 0,
             dirty: true,
         })
     }
@@ -598,9 +630,51 @@ impl Session {
         self.spin = !self.spin;
         self.dirty = true;
     }
+    /// Zoom about the middle of the picture.
     pub fn zoom_by(&mut self, factor: f64) {
-        self.zoom = (self.zoom * factor).clamp(0.3, 16.0);
+        self.zoom_about(factor, None);
+    }
+
+    /// Zoom, keeping the point `at` (in the picture's pixels) where it is.
+    fn zoom_about(&mut self, factor: f64, at: Option<(f64, f64)>) {
+        let zoom = (self.zoom * factor).clamp(0.2, 20_000.0);
+        let f = zoom / self.zoom;
+        let (ux, uy) = match at {
+            Some((x, y)) => (x - self.size.0 / 2.0, y - self.size.1 / 2.0),
+            None => (0.0, 0.0),
+        };
+        self.pan = (ux - (ux - self.pan.0) * f, uy - (uy - self.pan.1) * f);
+        self.zoom = zoom;
         self.dirty = true;
+    }
+
+    /// The zoom gesture: a wheel or two-finger scroll of `dy` pixels zooms
+    /// about the pointer, so scrolling over a detail brings it closer.
+    pub fn wheel(&mut self, dy: i64) {
+        let factor = ((dy as f64) * 0.004).clamp(-0.6, 0.6).exp();
+        let inside = self.cursor.filter(|(x, y)| *x >= 0.0 && *y >= 0.0 && *x <= self.size.0 && *y <= self.size.1);
+        self.zoom_about(factor, inside);
+    }
+
+    /// Back to the whole figure, seen from where it started.
+    pub fn home(&mut self) {
+        self.zoom = 1.0;
+        self.pan = (0.0, 0.0);
+        self.yaw = -0.7;
+        self.pitch = 0.5;
+        self.dirty = true;
+    }
+
+    /// Switch what a drag does: turn the figure, or move it.
+    pub fn toggle_drag(&mut self) {
+        self.drag_moves = !self.drag_moves;
+        self.dirty = true;
+    }
+
+    /// Where the picture sits in the page and how wide it is drawn.
+    pub fn place(&mut self, x: i64, y: i64, w: i64) {
+        self.origin = (x as f64, y as f64);
+        self.fit(w);
     }
     /// Draw at this width, keeping the default proportions.
     pub fn fit(&mut self, w: i64) {
@@ -613,12 +687,18 @@ impl Session {
     /// A pointer event over the picture: `down`, `move`, `up`. Dragging turns
     /// the figure. Coordinates are the event's integers, so replay is exact.
     pub fn pointer(&mut self, phase: &str, x: i64, y: i64) {
+        self.cursor = Some((x as f64 - self.origin.0, y as f64 - self.origin.1));
         match phase {
             "down" => self.drag = Some((x, y)),
             "move" => {
                 if let Some((px, py)) = self.drag {
-                    self.yaw += (x - px) as f64 * 0.008;
-                    self.pitch = (self.pitch + (y - py) as f64 * 0.008).clamp(-1.5, 1.5);
+                    let (dx, dy) = ((x - px) as f64, (y - py) as f64);
+                    if self.drag_moves {
+                        self.pan = (self.pan.0 + dx, self.pan.1 + dy);
+                    } else {
+                        self.yaw += dx * 0.008;
+                        self.pitch = (self.pitch + dy * 0.008).clamp(-1.5, 1.5);
+                    }
                     self.drag = Some((x, y));
                     self.dirty = true;
                 }
@@ -662,8 +742,19 @@ impl Session {
         if !self.dirty {
             return None;
         }
+        // A picture is parsed, laid out and painted by the browser on the
+        // thread that also takes its input, so pictures are rationed: about
+        // thirty a second while they are small, fewer as they grow. Whatever
+        // changed stays pending and is drawn when its turn comes.
+        let interval = (self.last_bytes as u64 / 1500).clamp(33, 120);
+        if self.last_emit.is_some_and(|l| now_ms < l + interval) {
+            return None;
+        }
         self.dirty = false;
-        Some(self.update())
+        self.last_emit = Some(now_ms);
+        let u = self.update();
+        self.last_bytes = u.svg.len();
+        Some(u)
     }
 
     /// The picture as it stands.
@@ -679,7 +770,10 @@ impl Session {
         if !self.playing && !self.at_end() {
             note.push_str(" (paused)");
         }
-        Update { svg: self.svg(), note, term: self.frames[shown].text.clone() }
+        if self.drag_moves {
+            note.push_str(" · drag moves");
+        }
+        Update { svg: self.svg(), note, term: self.frames[shown].text.clone(), playing: self.playing }
     }
 
     fn where_(&self) -> (usize, usize, f64) {
@@ -736,7 +830,7 @@ impl Session {
         for it in &mut items {
             let (x, y, z) = (it.p[0] - c[0], it.p[1] - c[1], it.p[2] - c[2]);
             let (xx, d) = (x * cyw - y * syw, x * syw + y * cyw);
-            it.q = [w / 2.0 + sc * xx, h / 2.0 - sc * (z * cp - d * sp), d * cp + z * sp];
+            it.q = [w / 2.0 + self.pan.0 + sc * xx, h / 2.0 + self.pan.1 - sc * (z * cp - d * sp), d * cp + z * sp];
         }
 
         // Spokes. A spoke is drawn in the colour of the hub it leaves.
@@ -753,7 +847,14 @@ impl Session {
             }
             let parent = &f.hubs[hub.parent as usize];
             let (Some(ci), Some(pi)) = (at.get(hub.id.as_str()), at.get(parent.id.as_str())) else { return };
-            spokes.push(Spoke { a: items[*pi].q, b: items[*ci].q, col: colour(parent.kind), alpha });
+            let (p, q) = (items[*pi].q, items[*ci].q);
+            // Leave out what cannot be seen: a spoke wholly to one side of
+            // the picture, or shorter than a third of a pixel.
+            let off = (p[0] < 0.0 && q[0] < 0.0) || (p[0] > w && q[0] > w) || (p[1] < 0.0 && q[1] < 0.0) || (p[1] > h && q[1] > h);
+            if off || (p[0] - q[0]).hypot(p[1] - q[1]) < 0.33 {
+                return;
+            }
+            spokes.push(Spoke { a: p, b: q, col: colour(parent.kind), alpha });
         };
         for ha in &a.hubs {
             let hb = b.index.get(&ha.id).map(|i| &b.hubs[*i]);
@@ -801,7 +902,7 @@ impl Session {
         order.sort_by(|x, y| items[*x].q[2].total_cmp(&items[*y].q[2]));
         for i in order {
             let it = &items[i];
-            if it.alpha <= 0.004 {
+            if it.alpha <= 0.004 || it.q[0] < -12.0 || it.q[0] > w + 12.0 || it.q[1] < -12.0 || it.q[1] > h + 12.0 {
                 continue;
             }
             let _ = write!(

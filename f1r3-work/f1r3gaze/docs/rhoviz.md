@@ -11,17 +11,37 @@ The page has two inputs: a rho term, and the number of comm events to
 animate. `*` reduces to completion. Caveat emptor: a term need not have one.
 That costs nothing but the frames watched, because the reduction is lazy (see
 below). **Reduce** runs what is in the form; the page also runs it once when it
-loads. The buttons step, pause, restart, stop the spin and zoom; dragging the
-picture turns it.
+loads.
+
+| control | does |
+| --- | --- |
+| scroll over the picture | zooms about the pointer: scroll over a detail to bring it closer |
+| drag | turns the figure; **drag: turn / move** switches a drag to moving it |
+| **+**, **−** | zoom about the middle |
+| **whole figure** | back to the starting view |
+| **pause** / **play**, ◀◀, ▶▶, **restart** | playback; the button says what it will do next |
+| **spin** | stops and starts the slow rotation |
 
 ## The figure
 
 The constructor of a node is its **colour**; the position of an argument is one
-of three orthogonal **axes**. A node whose largest child has radius `r` puts its
-children at distance `sqrt(2) r + 1` along the axes, so sibling figures lie in
-disjoint balls and no two spokes meet except at a shared hub. (The construction
-and its proof are in `publications`, "A Geometric Rendering of GSLT Syntax",
-Realisation D.)
+of three orthogonal **axes**. Child `i` of a node sits along axis `i`, one unit
+past the furthest any of its *siblings* reaches along that axis.
+
+Every figure lies in the positive orthant of its own hub, and that is the whole
+argument that nothing overlaps. No sibling has a point as far along axis `i` as
+child `i`'s nearest, so sibling figures are disjoint. A spoke lies on an axis
+along which every other child is displaced by a positive amount, so it meets
+none of them. And it reaches its own child from below, where that child has
+nothing.
+
+A figure's size is then a *sum* over its parts. The first version of this page
+used the rule of "A Geometric Rendering of GSLT Syntax", Realisation D, which
+moves every child past a ball around its largest sibling; that multiplies the
+size by about 2.4 at every level of nesting, and a term fourteen levels deep
+came out a hundred thousand units across with leaves one unit long. The same
+term is now a few hundred units across. The note has not yet been revised to
+match.
 
 | node | children along axes 1, 2, 3 |
 | --- | --- |
@@ -62,11 +82,11 @@ The picture is an inline `<svg>`, which Blitz parses and paints itself.
 
 | send | meaning |
 | --- | --- |
-| `rhoviz!("watch", *out)` | pictures arrive on `out` as `("ok", svg, note, term)`, one per frame in which the picture changed; a term that does not parse arrives as `("err", message)` |
+| `rhoviz!("watch", *out)` | pictures arrive on `out` as `("ok", svg, note, term, button)`, at most one a frame and only when the picture changed; `button` is `"pause"` while playback runs, else `"play"`; a term that does not parse arrives as `("err", message)` |
 | `rhoviz!("open", term, steps)` | start on `term` (a string); `steps` is a whole number or `"*"` |
 | `rhoviz!("play")`, `("pause")`, `("toggle")`, `("next")`, `("prev")`, `("restart")` | playback |
-| `rhoviz!("spin")`, `("zoom", "in" \| "out")`, `("pointer", "down" \| "move" \| "up", x, y)` | the camera |
-| `rhoviz!("fit", w)`, `("size", w, h)` | the size to draw at, in pixels |
+| `rhoviz!("spin")`, `("zoom", "in" \| "out")`, `("wheel", dy)`, `("home")`, `("drag")`, `("pointer", "down" \| "move" \| "up", x, y)` | the camera: `wheel` zooms about the last pointer position, `drag` switches a drag between turning and moving |
+| `rhoviz!("place", x, y, w)`, `("fit", w)`, `("size", w, h)` | where the picture is in the page and the size to draw it at, in pixels |
 | `rhoviz!("close")` | forget the term |
 
 ### Laziness
@@ -78,15 +98,30 @@ frames are kept (playback can seek backwards); a single frame may consume at
 most 20,000 ticks without the world visibly changing; and the term itself may
 grow without bound, which is the emptor's caveat.
 
+### Keeping the window responsive
+
+The browser parses, lays out and paints a picture on the thread that also takes
+its input, and a large picture costs tens of milliseconds. Pictures are
+therefore rationed: about thirty a second while they are small, down to eight a
+second for a picture of a few hundred nodes. What is off the picture, or
+smaller than a third of a pixel, is not drawn at all.
+
 ### Replay
 
-Pictures are injections like any other, so they are recorded in the `.gzlog`,
-and a replay shows the same pictures without reducing anything.
+Pictures are large and frequent, so they are *not* written to the `.gzlog`. A
+picture is a function of the term, of the events the page forwarded and of the
+frame times, all of which the log holds, so a replay draws the pictures again.
+This is exact on the machine that recorded the log. The pictures are computed in
+floating point, so a replay on a different platform could differ in a last
+digit and report a different commit hash; nothing else in F1R3Gaze has that
+property, and it is the price of a log that does not grow by megabytes a
+minute.
 
 ## Limits
 
-- Sizes grow by about 2.4 per level of nesting, so deep subterms are small at
-  the default zoom, and there is no pan.
+- A large term is still a large figure: zoom in to read it.
+- Which way a scroll zooms follows the sign the device reports, and has only
+  been tried through synthetic events.
 - A component that reacts and is re-formed identically (the listener in the
   default term) keeps its identity and is not ringed.
 - The store does not say whether a datum at rest is persistent, so a
