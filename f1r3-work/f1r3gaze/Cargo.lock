@@ -1148,6 +1148,7 @@ dependencies = [
  "gaze-dom-core",
  "gaze-exec",
  "gaze-knf",
+ "gaze-rhoviz",
  "k1ndl1ng-norm",
  "k1ndl1ng-parse",
  "keyboard-types 0.7.0",
@@ -1170,6 +1171,7 @@ dependencies = [
  "gaze-dom-core",
  "gaze-graded",
  "gaze-knf",
+ "gaze-rhoviz",
  "k1ndl1ng-campf1r3",
  "k1ndl1ng-norm",
  "k1ndl1ng-parse",
@@ -1210,6 +1212,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gaze-rhoviz"
+version = "0.1.0"
+dependencies = [
+ "b3ll0ws",
+ "campf1r3-core",
+ "k1ndl1ng-campf1r3",
+ "k1ndl1ng-norm",
+ "k1ndl1ng-parse",
+]
+
+[[package]]
 name = "gaze-shard"
 version = "0.1.0"
 dependencies = [
@@ -1241,6 +1254,7 @@ dependencies = [
  "gaze-exec",
  "gaze-knf",
  "gaze-net",
+ "gaze-rhoviz",
  "gaze-shard",
  "gaze-store",
  "gaze-wallet",

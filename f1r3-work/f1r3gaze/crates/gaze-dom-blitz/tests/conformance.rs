@@ -176,3 +176,44 @@ fn set_html_and_fragments_render() {
     assert!(s.contains("<p>one</p>"), "{s}");
     assert!(s.contains(r#"<p id="two">two &amp; more</p>"#), "{s}");
 }
+
+// ---------------------------------------------------------------------------
+// rhoviz: the picture is an inline SVG that Blitz itself parses and sizes.
+
+const RELAY: &str = "new a, b, c in { a!(Nil) | for(_ <- a){ b!(Nil) } | for(_ <- b){ c!(Nil) } | for(_ <- c){ stdout!(Nil) } }";
+
+#[test]
+fn rhoviz_agrees_across_backends_and_blitz_can_draw_the_picture() {
+    // The page without its <script> element: the program is loaded from
+    // its own text below, and the reference DOM does not treat a script's
+    // content as raw text, so `<-` inside one would not round-trip there.
+    let page = gaze_rhoviz::page_html(RELAY, "2");
+    let html = format!("{}</body></html>", page.split("<script").next().unwrap());
+    let k = Knf::from_source(gaze_rhoviz::SCRIPT, Level::K1G, &[]).unwrap();
+    let mut mem = TabExec::load(&k, MemDom::from_html(&html), [3; 32], &default_policy).unwrap();
+    let mut blz = TabExec::load(&k, BlitzDom::from_html(&html), [3; 32], &default_policy).unwrap();
+    let (mut t, mut u) = (0, 0);
+    frames(&mut mem, &mut t, 240);
+    frames(&mut blz, &mut u, 240);
+    let (m, b) = (mem.dom.backend.serialize(), blz.dom.backend.serialize());
+    if m != b {
+        let at = m.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(0);
+        let cut = |s: &str| s.chars().skip(at.saturating_sub(20)).take(260).collect::<String>();
+        panic!("documents differ at byte {at}:\n  mem:   {}\n  blitz: {}", cut(&m), cut(&b));
+    }
+    assert!(mem.commit_hashes() == blz.commit_hashes(), "the same pictures, frame by frame");
+
+    // Lay the document out as the window would. Blitz builds an inline
+    // <svg> by parsing its markup; a picture it could not parse would be
+    // left without image data and would paint nothing.
+    let doc = blz.dom.backend.doc.clone();
+    let mut doc = doc.borrow_mut();
+    doc.set_viewport(blitz_traits::shell::Viewport::new(1000, 900, 1.0, blitz_traits::shell::ColorScheme::Light));
+    doc.resolve(0.0);
+    let svg = doc.query_selector("#stage svg").unwrap().expect("a picture is on the stage");
+    let node = doc.get_node(svg).unwrap();
+    let tree = node.element_data().unwrap().svg_data().expect("Blitz parsed the picture as SVG");
+    assert!(tree.root().has_children(), "and it has something in it");
+    let size = node.final_layout().size;
+    assert!(size.width > 300.0 && size.height > 150.0, "laid out at {size:?}");
+}

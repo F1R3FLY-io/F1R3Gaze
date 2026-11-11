@@ -16,3 +16,8 @@ gaze-exec.workspace = true
 gaze-knf.workspace = true
 url = "2"
 keyboard-types = "0.7"
+
+[dev-dependencies]
+gaze-rhoviz.workspace = true
+# The rhoviz test checks that Blitz can lay out the picture as an inline SVG.
+blitz-dom = { workspace = true, features = ["svg"] }

@@ -24,6 +24,7 @@ anyrender_vello = { workspace = true, optional = true }
 gaze-broker.workspace = true
 gaze-dom-blitz.workspace = true
 gaze-exec.workspace = true
+gaze-rhoviz.workspace = true
 gaze-dom-core.workspace = true
 gaze-knf.workspace = true
 gaze-net.workspace = true

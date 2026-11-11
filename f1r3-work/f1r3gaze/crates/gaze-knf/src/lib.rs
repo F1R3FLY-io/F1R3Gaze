@@ -31,6 +31,7 @@ pub fn default_urn(ident: &str) -> Option<&'static str> {
         "log" => "rho:gaze:log",
         "clock" => "rho:gaze:clock",
         "rand" => "rho:gaze:rand",
+        "rhoviz" => "rho:gaze:rhoviz",
         "net" => "rho:gaze:net",
         "store" => "rho:gaze:store",
         "nav" => "rho:gaze:nav",
